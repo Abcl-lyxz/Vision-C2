@@ -47,7 +47,7 @@ func (c *UsersCommand) Execute(session ssh.Session, db *database.Database, args 
 		}
 	case "remove":
 		if len(args) < 2 {
-			displayEditOptions(session)
+			fmt.Fprintln(output, "Usage: users remove <username>")
 		} else {
 			c.removeUser(session, db, args[1], output)
 		}
@@ -238,7 +238,7 @@ func (c *UsersCommand) listUsers(db *database.Database, output io.Writer) {
 	fmt.Fprintln(w, "\033[37;1m--\t --------  \t ---- \t ----- \t -- \t --------- \t ---------- \033[0m")
 
 	for index, user := range users {
-		roleLabels := generateRoleLabels(user.Admin, user.Vip, user.Private)
+		roleLabels := utils.GenerateRoleLabels(user.Admin, user.Vip, user.Private)
 		expiryTime, err := time.Parse("2006-01-02 15:04:05", user.Expiry)
 		if err != nil {
 			log.Print(err)
@@ -350,26 +350,6 @@ func (c *UsersCommand) addUser(session ssh.Session, db *database.Database, outpu
 	}
 
 	fmt.Fprintf(output, "User %s was successfully added to the database.\n", username)
-}
-
-// generateRoleLabels creates role indicators with colored backgrounds
-func generateRoleLabels(isAdmin, isVip, isPrivate int) string {
-	roles := ""
-
-	if isAdmin == 1 {
-		roles += "\033[41;37m A \033[0m " // Red background, white text for Admin
-	}
-	if isVip == 1 {
-		roles += "\033[43;30m V \033[0m " // Yellow background, black text for VIP
-	}
-	if isPrivate == 1 {
-		roles += "\033[44;37m P \033[0m " // Blue background, white text for Private
-	}
-
-	if roles == "" {
-		return "\033[47;30m U \033[0m " // Gray background, black text for regular User
-	}
-	return roles
 }
 
 func (c *UsersCommand) AdminOnly() bool {

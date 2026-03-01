@@ -22,19 +22,20 @@ var OnlineUsers = 0
 
 var (
 	OnlineUsernames []string
-	mu              sync.Mutex // Mutex to protect access to OnlineUsernames
+	mu              sync.Mutex
 )
 var UserConnectionTimes = make(map[string]time.Time)
 
-var ActiveSessions = make(map[string]ssh.Session) // Map to track active sessions
+var ActiveSessions = make(map[string]ssh.Session)
+var sessionMu sync.Mutex // Protects ActiveSessions map
 
-// AddUser adds a username to the OnlineUsernames list and increments the OnlineUsers counter
+// AddUser adds a username to the online list
 func AddUser(username string) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, user := range OnlineUsernames {
 		if user == username {
-			return // Prevent duplicates
+			return
 		}
 	}
 	OnlineUsernames = append(OnlineUsernames, username)
@@ -42,15 +43,13 @@ func AddUser(username string) {
 	UserConnectionTimes[username] = time.Now()
 }
 
-// RemoveUser removes a username from the OnlineUsernames list and decrements the OnlineUsers counter
+// RemoveUser removes a username from the online list and closes active session
 func RemoveUser(username string) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Only remove the user if they exist in the list
 	for i, user := range OnlineUsernames {
 		if user == username {
-			// Log for debugging
 			OnlineUsernames = append(OnlineUsernames[:i], OnlineUsernames[i+1:]...)
 			OnlineUsers--
 			delete(UserConnectionTimes, username)
@@ -58,11 +57,12 @@ func RemoveUser(username string) {
 		}
 	}
 
-	// Make sure to check ActiveSessions before removing
+	sessionMu.Lock()
 	if session, ok := ActiveSessions[username]; ok {
-		session.Close() // Close session to free resources
+		session.Close()
 		delete(ActiveSessions, username)
 	}
+	sessionMu.Unlock()
 }
 
 // IsUserOnline checks if a user is already online
@@ -77,116 +77,91 @@ func IsUserOnline(username string) bool {
 	return false
 }
 
+// SessionHandler manages the lifecycle of an SSH user session
 func SessionHandler(db *database.Database, session ssh.Session) {
 	username := session.User()
 	utils.Init()
 
-	if existingSession, ok := ActiveSessions[username]; ok {
+	sessionMu.Lock()
+	existingSession, hasExisting := ActiveSessions[username]
+	sessionMu.Unlock()
+
+	if hasExisting {
 		term := terminal.NewTerminal(session, "")
 		term.Write([]byte("You have an active session already. Disconnect the other session? [y/n]: "))
 		response, _ := term.ReadLine()
 
 		if strings.ToLower(response) == "y" {
-			// Disconnect the existing session
 			log.Printf("Disconnecting existing session for user %s", username)
 			existingSession.Close()
-			RemoveUser(username) // Clean up old session data
+			RemoveUser(username)
 
-			// Re-register the new session AFTER cleanup
 			log.Printf("\033[32mSuccessful\033[0m SSH Connection from: \033[34m%s\033[0m@\033[34m%s\033[0m using \033[34m%s\033[0m", username, session.RemoteAddr().String(), session.Context().ClientVersion())
-			ActiveSessions[username] = session
-			AddUser(username)
-			UserConnectionTimes[username] = time.Now()
 
+			sessionMu.Lock()
+			ActiveSessions[username] = session
+			sessionMu.Unlock()
+
+			AddUser(username)
 			term.Write([]byte("Previous session disconnected. Welcome to your new session.\n"))
 		} else {
 			term.Write([]byte("Session login canceled.\n"))
 			return
 		}
 	} else {
-		// No active session, directly register the new session
 		log.Printf("\033[32mSuccessful\033[0m SSH Connection from: \033[34m%s\033[0m@\033[34m%s\033[0m using \033[34m%s\033[0m", username, session.RemoteAddr().String(), session.Context().ClientVersion())
 		AddUser(username)
+
+		sessionMu.Lock()
 		ActiveSessions[username] = session
-		UserConnectionTimes[username] = time.Now()
+		sessionMu.Unlock()
 	}
 
-	// Register the new session
-	// Register the session and clean up properly when done
-	ActiveSessions[username] = session
-	AddUser(username)
-
-	// Load user information
+	// Load config (non-fatal on error)
 	config, err := utils.LoadConfig("assets/config.json")
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		log.Printf("failed to load config: %v", err)
+		session.Write([]byte("Internal error loading config\r\n"))
+		RemoveUser(username)
+		return
 	}
+
 	userInfo := db.GetAccountInfo(username)
 	userIp := session.RemoteAddr().String()
 
 	// First-time password setup if IP not registered
 	if !db.CheckIfIpExists(userInfo.Username) {
-		term := terminal.NewTerminal(session, "")
-		term.Write([]byte("Please type a new password: "))
-		password, _ := term.ReadPassword("")
-		term.Write([]byte("Please retype the password: "))
-		password2, _ := term.ReadPassword("")
+		t := terminal.NewTerminal(session, "")
+		t.Write([]byte("Please type a new password: "))
+		password, _ := t.ReadPassword("")
+		t.Write([]byte("Please retype the password: "))
+		password2, _ := t.ReadPassword("")
 
 		if password != password2 {
-			term.Write([]byte("Passwords do not match\n"))
+			t.Write([]byte("Passwords do not match\n"))
 			RemoveUser(username)
 			return
 		}
+
+		if len(password) < config.PasswordMinLength {
+			t.Write([]byte(fmt.Sprintf("Password must be at least %d characters\n", config.PasswordMinLength)))
+			RemoveUser(username)
+			return
+		}
+
 		db.ChangePassword(userInfo.Username, password)
 	}
 
 	db.UpdateIp(userInfo.Username, userIp)
-	// Branding and setup for the session
-	expiryTime, err := time.Parse("2006-01-02 15:04:05", userInfo.Expiry)
-	brandingDataPrompt := map[string]interface{}{
-		"user.Username":            session.User(),
-		"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-		"user.Admin":               utils.CalculateInt(userInfo.Admin),
-		"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-		"user.Private":             utils.CalculateInt(userInfo.Private),
-		"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-		"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-		"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-		"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-		"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-		"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-		"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-		"user.SSH_Client":          session.Context().ClientVersion(),
-		"user.Created_by":          userInfo.CreatedBy,
-		"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-	}
 
-	customPrompt := utils.Branding(session, "prompt", brandingDataPrompt)
-	term := term.NewTerminal(session, customPrompt)
+	// Build branding data and render prompt
+	brandingData := BuildBrandingData(session, db)
+	customPrompt := utils.Branding(session, "prompt", brandingData)
+	termSession := term.NewTerminal(session, customPrompt)
 
-	brandingDataMessages := map[string]interface{}{
-		"user.Username":            session.User(),
-		"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-		"user.Admin":               utils.CalculateInt(userInfo.Admin),
-		"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-		"user.Private":             utils.CalculateInt(userInfo.Private),
-		"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-		"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-		"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-		"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-		"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-		"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-		"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-		"user.SSH_Client":          session.Context().ClientVersion(),
-		"user.Created_by":          userInfo.CreatedBy,
-		"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-		"clear":                    "\x1b[2J \x1b[H",
-		"sleep": func(duration int) {
-			time.Sleep(time.Duration(duration) * time.Millisecond)
-		},
-	}
-
-	welcomeMessage := utils.Branding(session, "home-splash", brandingDataMessages)
+	// Render welcome splash
+	welcomeData := BuildBrandingData(session, db)
+	welcomeMessage := utils.Branding(session, "home-splash", welcomeData)
 	utils.SendMessage(session, welcomeMessage, true)
 
 	// Periodic title updater
@@ -194,40 +169,18 @@ func SessionHandler(db *database.Database, session ssh.Session) {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			slotsInUse := db.GetCurrentAttacksLength()
-			slots := config.Global_slots
-
-			// Update brandingDataTitle with the latest values
-			brandingDataTitle := map[string]interface{}{
-				"user.Username":            session.User(),
-				"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-				"user.Admin":               utils.CalculateInt(userInfo.Admin),
-				"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-				"user.Private":             utils.CalculateInt(userInfo.Private),
-				"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-				"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-				"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-				"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-				"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-				"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-				"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-				"user.SSH_Client":          session.Context().ClientVersion(),
-				"user.Created_by":          userInfo.CreatedBy,
-				"cnc.Totalslots":           strconv.Itoa(slots),
-				"cnc.Online":               strconv.Itoa(OnlineUsers),
-				"cnc.Usedslots":            strconv.Itoa(slotsInUse),
-				"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-			}
-
-			// Set the updated title
-			utils.SetTitle(session, utils.Branding(session, "title", brandingDataTitle))
+			titleData := BuildBrandingData(session, db)
+			titleData["cnc.Totalslots"] = strconv.Itoa(config.Global_slots)
+			titleData["cnc.Online"] = strconv.Itoa(OnlineUsers)
+			titleData["cnc.Usedslots"] = strconv.Itoa(db.GetCurrentAttacksLength())
+			utils.SetTitle(session, utils.Branding(session, "title", titleData))
 		}
 	}()
 
 	commandHandler := NewCommandHandler(db, session)
 
 	for {
-		line, err := term.ReadLine()
+		line, err := termSession.ReadLine()
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -246,54 +199,49 @@ func SessionHandler(db *database.Database, session ssh.Session) {
 		AttackHandler(db, session, args)
 
 		if line == "exit" || line == "quit" || line == "q" || line == "logout" {
-			term.Write([]byte("Goodbye!\n"))
+			termSession.Write([]byte("Goodbye!\n"))
 			break
 		}
 
-		// Display online users
 		if line == "online" {
 			var output strings.Builder
 			DisplayOnlineUsers(db, session, &output)
-			term.Write([]byte(output.String()))
+			termSession.Write([]byte(output.String()))
 			continue
 		}
 
-		commandHandler.ExecuteCommand(line, term)
+		commandHandler.ExecuteCommand(line, termSession)
 	}
+
 	RemoveUser(username)
+	sessionMu.Lock()
 	delete(ActiveSessions, username)
+	sessionMu.Unlock()
 }
 
+// DisplayOnlineUsers renders a table of currently connected users
 func DisplayOnlineUsers(db *database.Database, session ssh.Session, output io.Writer) {
+	theme := utils.GetTheme()
 	w := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
 
-	// Header
-	fmt.Fprintln(w, "\033[37;1m#\tUsername        \tConnected   \tRoles\033[0m")
-	fmt.Fprintln(w, "\033[37;1m--\t-------------- \t------------ \t--------------\033[0m")
+	fmt.Fprintf(w, "%s#\tUsername        \tConnected   \tRoles%s\n", theme.Colors.TableHeader, theme.Colors.Reset)
+	fmt.Fprintf(w, "%s--\t-------------- \t------------ \t--------------%s\n", theme.Colors.TableHeader, theme.Colors.Reset)
 
-	// Loop through OnlineUsernames to print each user
 	for index, user := range OnlineUsernames {
 		userInfo := db.GetAccountInfo(user)
 		roleLabels := utils.GenerateRoleLabels(userInfo.Admin, userInfo.Vip, userInfo.Private)
 
-		// Calculate activity time
 		connectionTime, exists := UserConnectionTimes[user]
 		if !exists {
-			connectionTime = time.Now() // Fallback to avoid potential issues if not found
+			connectionTime = time.Now()
 		}
-		activityDuration := time.Since(connectionTime)
-		activityTimeStr := formatDuration(activityDuration)
+		activityTimeStr := formatDuration(time.Since(connectionTime))
 
-		// Print each row
-		fmt.Fprintf(w, "\033[37;1m%d\t %s\t %s\t %s\t\033[0m\n",
-			index+1, userInfo.Username, activityTimeStr, roleLabels)
+		fmt.Fprintf(w, "%s%d\t %s\t %s\t %s\t%s\n",
+			theme.Colors.Info, index+1, userInfo.Username, activityTimeStr, roleLabels, theme.Colors.Reset)
 	}
 
 	w.Flush()
-}
-
-func formatUsername(username string) string {
-	return fmt.Sprintf("%-14s", username) // Ensure usernames align by padding to 14 characters
 }
 
 func formatDuration(d time.Duration) string {

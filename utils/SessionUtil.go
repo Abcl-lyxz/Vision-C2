@@ -7,6 +7,7 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 )
 
+// SendMessage writes a message to the SSH session with optional newline
 func SendMessage(session ssh.Session, message string, newline bool) {
 	if newline {
 		session.Write([]byte(message + "\r\n"))
@@ -15,10 +16,12 @@ func SendMessage(session ssh.Session, message string, newline bool) {
 	}
 }
 
+// SetTitle sets the terminal window title via ANSI escape
 func SetTitle(session ssh.Session, message string) {
 	session.Write([]byte("\033]0;" + message + "\007"))
 }
 
+// ReadLine reads a line of input from the SSH session
 func ReadLine(session ssh.Session) (string, error) {
 	terminal := terminal.NewTerminal(session, "")
 	input, err := terminal.ReadLine()
@@ -28,21 +31,23 @@ func ReadLine(session ssh.Session) (string, error) {
 	return strings.TrimSpace(input), nil
 }
 
+// GenerateRoleLabels creates colored role badges from theme config
 func GenerateRoleLabels(isAdmin, isVip, isPrivate int) string {
+	theme := GetTheme()
 	roles := ""
 
 	if isAdmin == 1 {
-		roles += "\033[41;37m A \033[0m " // Red background, white text for Admin
+		roles += theme.Colors.RoleAdmin + " A " + theme.Colors.Reset + " "
 	}
 	if isVip == 1 {
-		roles += "\033[43;30m V \033[0m " // Yellow background, black text for VIP
+		roles += theme.Colors.RoleVip + " V " + theme.Colors.Reset + " "
 	}
 	if isPrivate == 1 {
-		roles += "\033[44;37m P \033[0m " // Blue background, white text for Private
+		roles += theme.Colors.RolePrivate + " P " + theme.Colors.Reset + " "
 	}
 
 	if roles == "" {
-		return "\033[47;30m U \033[0m " // Gray background, black text for regular User
+		return theme.Colors.RoleUser + " U " + theme.Colors.Reset + " "
 	}
 	return roles
 }

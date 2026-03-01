@@ -5,33 +5,31 @@ import (
 	"time"
 )
 
+// CalculateExpiryString returns a human-readable string for time remaining until expiry
 func CalculateExpiryString(expiryTime time.Time) string {
-	loc, _ := time.LoadLocation("Europe/Warsaw")
-	now := time.Now().In(loc)
+	now := time.Now().UTC()
 	nowLocal := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), expiryTime.Location())
 	timeUntilExpiry := expiryTime.Sub(nowLocal)
 
 	switch {
 	case timeUntilExpiry > 24*time.Hour:
-		days := int(timeUntilExpiry.Hours() / 24)
-		return fmt.Sprintf("%d days", days)
+		return fmt.Sprintf("%d days", int(timeUntilExpiry.Hours()/24))
 	case timeUntilExpiry > time.Hour:
-		hours := int(timeUntilExpiry.Hours())
-		return fmt.Sprintf("%d hours", hours)
+		return fmt.Sprintf("%d hours", int(timeUntilExpiry.Hours()))
 	case timeUntilExpiry > time.Minute:
-		minutes := int(timeUntilExpiry.Minutes())
-		return fmt.Sprintf("%d minutes", minutes)
+		return fmt.Sprintf("%d minutes", int(timeUntilExpiry.Minutes()))
 	case timeUntilExpiry > time.Second:
-		seconds := int(timeUntilExpiry.Seconds())
-		return fmt.Sprintf("%d seconds", seconds)
+		return fmt.Sprintf("%d seconds", int(timeUntilExpiry.Seconds()))
 	default:
 		return "Expired"
 	}
 }
 
+// CalculateInt returns a colored "true"/"false" string based on integer value
 func CalculateInt(value int) string {
+	theme := GetTheme()
 	if value == 0 {
-		return "\033[31mfalse\033[0m" // Red for false
+		return theme.Colors.Error + "false" + theme.Colors.Reset
 	}
-	return "\033[32mtrue\033[0m" // Green for true
+	return theme.Colors.Success + "true" + theme.Colors.Reset
 }

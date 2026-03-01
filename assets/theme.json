@@ -1,0 +1,15 @@
+{
+    "colors": {
+        "success": "\u001b[32m",
+        "error": "\u001b[91m",
+        "warning": "\u001b[93m",
+        "info": "\u001b[37;1m",
+        "reset": "\u001b[0m",
+        "table_header": "\u001b[37;1m",
+        "role_admin": "\u001b[41;37m",
+        "role_vip": "\u001b[43;30m",
+        "role_private": "\u001b[44;37m",
+        "role_user": "\u001b[47;30m"
+    },
+    "prefix": "[ Vision ]"
+}

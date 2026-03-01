@@ -14,6 +14,9 @@ A feature-rich **Command & Control** panel built in Go, providing a fully custom
 - **User Management** — Role-based access control (Admin / VIP / Private), plan expiration, and per-user settings
 - **Logging** — File, Telegram, and Discord webhook logging support
 - **Security** — bcrypt password hashing with auto-upgrade from legacy cleartext passwords
+- **Theme System** — Fully configurable ANSI colors and prefix via `theme.json`
+- **Hot Reload** — Admin `reload` command to refresh config, methods, theme, and branding without restart
+- **Graceful Shutdown** — Handles SIGINT/SIGTERM cleanly, closing DB and sessions
 
 ---
 
@@ -25,8 +28,9 @@ vision/
 ├── go.mod / go.sum             # Go module dependencies
 │
 ├── assets/
-│   ├── config.json             # Main configuration (ports, DB, slots)
-│   ├── gradient.json           # Color gradient definitions for UI
+│   ├── config.json             # Main configuration (ports, DB, tokens, policies)
+│   ├── theme.json              # UI color theme and prefix settings
+│   ├── gradient.json           # Color gradient definitions for branding
 │   ├── branding/               # .tfx template files for terminal UI
 │   │   ├── home-splash.tfx     # Welcome screen
 │   │   ├── prompt.tfx          # Command prompt
@@ -49,7 +53,8 @@ vision/
 │   ├── SessionHandler.go       # SSH session lifecycle management
 │   ├── CommandHandler.go       # Command routing and execution
 │   ├── AttackHandler.go        # Attack validation and dispatch
-│   └── FunnelHandler.go        # HTTP API server and routing
+│   ├── FunnelHandler.go        # HTTP API server and routing
+│   └── BrandingHelper.go       # Shared branding data builder
 │
 ├── managers/
 │   ├── AttackManager.go        # Attack construction, API calls, ASN lookup
@@ -69,10 +74,11 @@ vision/
 │   ├── ClearCommand.go         # !clear
 │   ├── EditAllCommand.go       # !editall (admin)
 │   ├── CreditsCommand.go       # !credits
-│   └── HelloCommand.go         # !hello
+│   └── ReloadCommand.go        # !reload (admin) — hot-reload config/theme
 │
 └── utils/
     ├── ConfigUtil.go           # Config loading and saving
+    ├── ThemeUtil.go            # Theme color loading from theme.json
     ├── BrandingUtil.go         # Template engine with gradients
     ├── MethodsUtil.go          # Method config loading and permission checks
     ├── SessionUtil.go          # Terminal output helpers
@@ -117,17 +123,23 @@ CREATE DATABASE vision;
 ```json
 {
   "cnc": {
-    "port": "2222",          // SSH server port
-    "api_port": "7575",      // HTTP API funnel port
-    "attacks_enabled": true, // Global attack toggle
-    "global_cooldown": 0,    // Cooldown between any attack (seconds, 0 = disabled)
-    "global_slots": 3        // Max concurrent attacks globally
+    "port": "2222",              // SSH server port
+    "api_port": "7575",          // HTTP API funnel port
+    "attacks_enabled": true,     // Global attack toggle
+    "global_cooldown": 0,        // Cooldown between any attack (seconds)
+    "global_slots": 3,           // Max concurrent attacks globally
+    "ipinfo_token": "YOUR_TOKEN",// ipinfo.io API token for ASN lookups
+    "proxy_url": "HOST:PORT",    // Proxy for URL target resolution
+    "password_min_length": 6,    // Minimum password length
+    "timezone": "UTC"            // Timezone for expiry display
   },
   "mysql": {
     "db_user": "root",
-    "db_pass": "CHANGE_ME",  // ← Set your MySQL password
+    "db_pass": "CHANGE_ME",      // ← Set your MySQL password
     "db_host": "localhost",
-    "db_name": "vision"
+    "db_name": "vision",
+    "max_connections": 25,       // Max DB pool size
+    "conn_lifetime_minutes": 5   // Connection lifetime
   }
 }
 ```
@@ -178,6 +190,28 @@ Configure your attack API endpoints. Each method entry has:
     "enabled": false,
     "webhook_url": "YOUR_DISCORD_WEBHOOK_URL"
   }
+}
+```
+
+#### `assets/theme.json`
+
+Customize all UI colors and message prefix:
+
+```json
+{
+  "colors": {
+    "success": "\u001b[32m",
+    "error": "\u001b[91m",
+    "warning": "\u001b[93m",
+    "info": "\u001b[37;1m",
+    "reset": "\u001b[0m",
+    "table_header": "\u001b[37;1m",
+    "role_admin": "\u001b[41;37m",
+    "role_vip": "\u001b[43;30m",
+    "role_private": "\u001b[44;37m",
+    "role_user": "\u001b[47;30m"
+  },
+  "prefix": "[ Vision ]"
 }
 ```
 
@@ -278,6 +312,7 @@ GET /api/attack?username=USER&password=PASS&target=IP&port=PORT&time=SECONDS&met
 | `logs` | View/clear attack logs | Yes |
 | `toggle` | Enable/disable attacks globally | Yes |
 | `editall` | Bulk edit all users | Yes |
+| `reload` | Hot-reload config/theme/methods | Yes |
 
 ---
 

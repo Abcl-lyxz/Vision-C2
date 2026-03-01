@@ -23,7 +23,7 @@ func (c *CreditsCommand) AdminOnly() bool {
 }
 
 func (c *CreditsCommand) Aliases() []string {
-	return []string{"Credits", "credits"}
+	return []string{"credits"}
 }
 
 func init() {

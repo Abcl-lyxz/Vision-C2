@@ -78,7 +78,7 @@ func processAttack(username, password, target, port, timeStr, method string, db 
 
 	currentAttacks := db.GetCurrentAttacksLength()
 	if currentAttacks > config.Global_slots {
-		return nil, fmt.Errorf("Global network slots (" + strconv.Itoa(config.Global_slots) + ") are currently in use.")
+		return nil, fmt.Errorf("global network slots (%d) are currently in use", config.Global_slots)
 	}
 
 	if cooldown := db.HowLongOnCooldown(username, user.Cooldown); cooldown > 0 {
@@ -102,12 +102,11 @@ func processAttack(username, password, target, port, timeStr, method string, db 
 		if blocked, err := isTargetBlocked(target); blocked || err != nil {
 			lm, err := NewLogManager("./assets/logs/logs.json")
 			if err != nil {
-				fmt.Println("Error initializing LogManager:", err)
-				os.Exit(1)
+				log.Printf("Error initializing LogManager: %v", err)
+			} else {
+				defer lm.Close()
+				lm.Log("User tried to attack blocked target (API)!\nUsername: " + username + "\nTarget: " + target + "\nPort: " + port + "\nTime: " + timeStr + "\nMethod: " + method + "\n----------------------")
 			}
-			defer lm.Close()
-
-			lm.Log("User tried to attack blocked target (API)!\nUsername: " + username + "\nTarget: " + target + "\nPort: " + port + "\nTime: " + timeStr + "\nMethod: " + method + "\n----------------------")
 			return nil, fmt.Errorf("Target is blocked.")
 		}
 	}
@@ -130,11 +129,11 @@ func processAttack(username, password, target, port, timeStr, method string, db 
 	asnInfo := fetchASNInfo(target)
 	lm, err := NewLogManager("./assets/logs/logs.json")
 	if err != nil {
-		fmt.Println("Error initializing LogManager:", err)
-		os.Exit(1)
+		log.Printf("Error initializing LogManager: %v", err)
+	} else {
+		defer lm.Close()
+		lm.Log("New Attack (API)!\nUsername: " + username + "\nTarget: " + target + "\nPort: " + port + "\nTime: " + timeStr + "\nMethod: " + method + "\n----------------------")
 	}
-	defer lm.Close()
-	lm.Log("New Attack (API)!\nUsername: " + username + "\nTarget: " + target + "\nPort: " + port + "\nTime: " + timeStr + "\nMethod: " + method + "\n----------------------")
 	db.LogAttack(username, target, port, parseTime(timeStr), method)
 
 	// Send immediate response
@@ -220,9 +219,15 @@ func FunnelCreate(w http.ResponseWriter, r *http.Request, db *database.Database,
 	respondWithJSON(w, false, response)
 }
 
+// fetchASNInfo retrieves country/org/region for a target IP
 func fetchASNInfo(target string) (asnInfo struct{ Country, Org, Region string }) {
+	config, _ := utils.LoadConfig("assets/config.json")
+	token := "YOUR_IPINFO_TOKEN"
+	if config != nil && config.IpinfoToken != "" {
+		token = config.IpinfoToken
+	}
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("https://ipinfo.io/" + target + "/json?token=YOUR_IPINFO_TOKEN")
+	resp, err := client.Get("https://ipinfo.io/" + target + "/json?token=" + token)
 	if err != nil {
 		log.Printf("Error fetching ASN info: %s", err)
 		return

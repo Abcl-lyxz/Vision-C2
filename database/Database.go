@@ -6,9 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/big"
+	"os"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -36,7 +36,7 @@ type AccountInfo struct {
 	CreatedBy       string
 }
 
-// ConnectDB initializes a connection to the database using the given configuration
+// ConnectDB initializes a MySQL connection using the given configuration
 func ConnectDB(config *utils.Config) (*Database, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s", config.DBUser, config.DBPass, config.DBHost, config.DBName)
 	db, err := sql.Open("mysql", dsn)
@@ -44,32 +44,29 @@ func ConnectDB(config *utils.Config) (*Database, error) {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetMaxOpenConns(config.DBMaxConns)
+	db.SetMaxIdleConns(config.DBMaxConns)
+	db.SetConnMaxLifetime(time.Duration(config.DBConnLifetime) * time.Minute)
 
 	return &Database{DB: db}, nil
 }
 
-// AuthenticateUser verifies the user's password
+// AuthenticateUser verifies credentials, supports bcrypt with legacy cleartext auto-upgrade
 func (db *Database) AuthenticateUser(username, password string) bool {
 	var storedPassword string
-	query := "SELECT password FROM users WHERE username = ?"
-	err := db.DB.QueryRow(query, username).Scan(&storedPassword)
+	err := db.DB.QueryRow("SELECT password FROM users WHERE username = ?", username).Scan(&storedPassword)
 	if err != nil {
 		log.Printf("failed to authenticate user %s: %v", username, err)
 		return false
 	}
 
-	// Check if this is a bcrypt hash
-	err = bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(password))
-	if err == nil {
+	// Try bcrypt first
+	if bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(password)) == nil {
 		return true
 	}
 
-	// Fallback to cleartext check for legacy users until they reset
+	// Fallback: cleartext check for legacy users, auto-upgrade to bcrypt
 	if password == storedPassword {
-		// Auto-upgrade password
 		go db.ChangePassword(username, password)
 		return true
 	}
@@ -143,8 +140,8 @@ func (db *Database) IsAccountExpired(username string) bool {
 	return false
 }
 
+// IsSpamming checks if user hit any target 3+ times in the last 10 minutes
 func (db *Database) IsSpamming(username string) bool {
-	// Sprawdź, czy użytkownik spammował jakikolwiek target co najmniej 3 razy w ciągu ostatnich 10 minut
 	var countTarget int
 	err := db.DB.QueryRow(
 		"SELECT COUNT(DISTINCT target) FROM attacks WHERE username = ? AND hitted > DATE_SUB(NOW(), INTERVAL 10 MINUTE) GROUP BY target HAVING COUNT(id) >= 3",
@@ -157,13 +154,7 @@ func (db *Database) IsSpamming(username string) bool {
 		return false
 	}
 
-	// Jeśli użytkownik spammował co najmniej 1 target co najmniej 3 razy
-	if countTarget > 0 {
-		// Użytkownik jest na cooldownie przed atakowaniem jakiegokolwiek targetu
-		return true
-	}
-
-	return false
+	return countTarget > 0
 }
 
 func (db *Database) IsTargetCurrentlyUnderAttack(targetID string) bool {
@@ -427,7 +418,7 @@ func CreateDefaultUser(db *sql.DB) error {
 
 	// Write the root credentials to default_user.txt
 	credentials := fmt.Sprintf("root:%s\n", password)
-	err = ioutil.WriteFile("default_user.txt", []byte(credentials), 0600)
+	err = os.WriteFile("default_user.txt", []byte(credentials), 0600)
 	if err != nil {
 		return fmt.Errorf("error writing default user credentials to file: %v", err)
 	}
@@ -436,8 +427,9 @@ func CreateDefaultUser(db *sql.DB) error {
 	return nil
 }
 
+// ClearLogs deletes all records from the attacks table
 func (db *Database) ClearLogs() bool {
-	_, err := db.DB.Exec("DELETE FROM attacks") // Usuwanie wszystkich rekordów z tabeli 'attacks'
+	_, err := db.DB.Exec("DELETE FROM attacks")
 	if err != nil {
 		log.Println("Failed to clear logs:", err)
 		return false
@@ -445,30 +437,15 @@ func (db *Database) ClearLogs() bool {
 	return true
 }
 
+// GetCurrentAttacksLength2 counts active attacks for a specific method
 func (db *Database) GetCurrentAttacksLength2(method string) int {
-	// Używamy parametrów zapytania, aby uniknąć SQL Injection
-	query := "SELECT COUNT(*) as target FROM attacks WHERE end > NOW() AND method = ?"
-	rows, err := db.DB.Query(query, method)
+	var count int
+	err := db.DB.QueryRow("SELECT COUNT(*) FROM attacks WHERE end > NOW() AND method = ?", method).Scan(&count)
 	if err != nil {
-		log.Println("Error executing query:", err)
+		log.Println("Error counting method attacks:", err)
 		return 0
 	}
-	defer rows.Close()
-
-	// Sprawdzamy, czy zapytanie zwróciło jakieś wiersze
-	if !rows.Next() {
-		log.Println("No rows returned from query.")
-		return 0
-	}
-
-	var target int
-	err = rows.Scan(&target)
-	if err != nil {
-		log.Println("Error scanning result:", err)
-		return 0
-	}
-
-	return target
+	return count
 }
 
 func (db *Database) HowLongOnGlobalCooldown(cooldown int) int {
@@ -767,12 +744,25 @@ func (db *Database) UpdateIp(username string, ip string) {
 	}
 }
 
+// VerifyPassword checks if the given password matches the stored hash
 func (db *Database) VerifyPassword(username, password string) (bool, error) {
 	storedPassword, err := db.GetPassword(username)
 	if err != nil {
 		return false, err
 	}
-	return storedPassword == password, nil
+
+	// Try bcrypt comparison
+	if bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(password)) == nil {
+		return true, nil
+	}
+
+	// Fallback: cleartext for legacy passwords
+	if storedPassword == password {
+		go db.ChangePassword(username, password)
+		return true, nil
+	}
+
+	return false, nil
 }
 
 func (db *Database) GetPassword(username string) (string, error) {

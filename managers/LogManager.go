@@ -3,13 +3,12 @@ package managers
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 )
 
+// LogConfig holds logging configuration for file, Telegram, and Discord
 type LogConfig struct {
 	Global   GlobalConfig   `json:"global"`
 	Telegram TelegramConfig `json:"telegram"`
@@ -32,58 +31,60 @@ type DiscordConfig struct {
 	WebhookURL string `json:"webhook_url"`
 }
 
+// LogManager handles multi-channel logging (file, Telegram, Discord)
 type LogManager struct {
 	config  LogConfig
 	logFile *os.File
 }
 
+// NewLogManager loads config and opens log file if enabled
 func NewLogManager(configPath string) (*LogManager, error) {
-	configData, err := ioutil.ReadFile(configPath)
+	configData, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
+		return nil, err
 	}
 
 	var config LogConfig
 	if err := json.Unmarshal(configData, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+		return nil, err
 	}
 
 	var logFile *os.File
 	if config.Global.Enabled && config.Global.LogInFiles {
 		logFile, err = os.OpenFile("./assets/logs/global_logs.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open log file: %w", err)
+			return nil, err
 		}
 	}
 
 	return &LogManager{config: config, logFile: logFile}, nil
 }
 
+// Log sends a message to all enabled channels
 func (lm *LogManager) Log(message string) {
-	if lm.config.Global.Enabled {
-		if lm.config.Global.LogInFiles && lm.logFile != nil {
-			log.SetOutput(lm.logFile)
-			log.Println(message)
-		}
+	if !lm.config.Global.Enabled {
+		return
+	}
 
-		if lm.config.Telegram.Enabled {
-			lm.sendToTelegram(message)
-		}
+	if lm.config.Global.LogInFiles && lm.logFile != nil {
+		log.SetOutput(lm.logFile)
+		log.Println(message)
+	}
 
-		if lm.config.Discord.Enabled {
-			lm.sendToDiscord(message)
-		}
+	if lm.config.Telegram.Enabled {
+		lm.sendToTelegram(message)
+	}
+	if lm.config.Discord.Enabled {
+		lm.sendToDiscord(message)
 	}
 }
 
 func (lm *LogManager) sendToTelegram(message string) {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", lm.config.Telegram.BotToken)
-	payload := map[string]interface{}{
+	payload, _ := json.Marshal(map[string]interface{}{
 		"chat_id": lm.config.Telegram.ChatID,
 		"text":    message,
-	}
-	data, _ := json.Marshal(payload)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	})
+	resp, err := http.Post("https://api.telegram.org/bot"+lm.config.Telegram.BotToken+"/sendMessage", "application/json", bytes.NewBuffer(payload))
 	if err != nil {
 		log.Printf("failed to send Telegram message: %v", err)
 		return
@@ -92,11 +93,8 @@ func (lm *LogManager) sendToTelegram(message string) {
 }
 
 func (lm *LogManager) sendToDiscord(message string) {
-	payload := map[string]interface{}{
-		"content": message,
-	}
-	data, _ := json.Marshal(payload)
-	resp, err := http.Post(lm.config.Discord.WebhookURL, "application/json", bytes.NewBuffer(data))
+	payload, _ := json.Marshal(map[string]interface{}{"content": message})
+	resp, err := http.Post(lm.config.Discord.WebhookURL, "application/json", bytes.NewBuffer(payload))
 	if err != nil {
 		log.Printf("failed to send Discord message: %v", err)
 		return
@@ -104,6 +102,7 @@ func (lm *LogManager) sendToDiscord(message string) {
 	defer resp.Body.Close()
 }
 
+// Close releases the log file handle
 func (lm *LogManager) Close() {
 	if lm.logFile != nil {
 		lm.logFile.Close()

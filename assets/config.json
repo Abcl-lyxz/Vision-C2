@@ -4,12 +4,18 @@
 		"api_port": "7575",
 		"attacks_enabled": true,
 		"global_cooldown": 0,
-		"global_slots": 3
+		"global_slots": 3,
+		"ipinfo_token": "YOUR_IPINFO_TOKEN",
+		"proxy_url": "YOUR_PROXY_HOST:PORT",
+		"password_min_length": 6,
+		"timezone": "UTC"
 	},
 	"mysql": {
 		"db_user": "root",
 		"db_pass": "CHANGE_ME",
 		"db_host": "localhost",
-		"db_name": "vision"
+		"db_name": "vision",
+		"max_connections": 25,
+		"conn_lifetime_minutes": 5
 	}
 }
