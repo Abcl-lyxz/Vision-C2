@@ -1,0 +1,17 @@
+{
+    "red": {
+      "from_color": "#c62828",
+      "to_color": "#c0392b",
+      "background": false
+    },
+    "background": {
+      "from_color": "#cb4335",
+      "to_color": "#c0392b",
+      "background": true
+    },
+    "simplered": {
+      "from_color": "#D22B2B",
+      "to_color": "#FF3131",
+      "background": false
+    }
+}

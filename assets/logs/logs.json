@@ -1,0 +1,15 @@
+{
+    "global": {
+        "enabled": true,
+        "log_in_files": true
+    },
+    "telegram": {
+        "enabled": false,
+        "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
+        "chat_id": "YOUR_TELEGRAM_CHAT_ID"
+    },
+    "discord": {
+        "enabled": false,
+        "webhook_url": "YOUR_DISCORD_WEBHOOK_URL"
+    }
+}

