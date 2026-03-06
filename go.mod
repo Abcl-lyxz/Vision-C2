@@ -1,4 +1,4 @@
-module arismcnc
+module visioncnc
 
 go 1.24.0
 

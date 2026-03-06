@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"arismcnc/database"
-	"arismcnc/utils"
 	"strconv"
 	"time"
+	"visioncnc/database"
+	"visioncnc/utils"
 
 	"github.com/gliderlabs/ssh"
 )

@@ -1,10 +1,11 @@
 package cmds
 
 import (
-	"arismcnc/database"
-	"arismcnc/utils"
 	"fmt"
 	"io"
+	"visioncnc/database"
+	"visioncnc/managers"
+	"visioncnc/utils"
 
 	"github.com/gliderlabs/ssh"
 )
@@ -32,6 +33,9 @@ func (c *ReloadCommand) Execute(session ssh.Session, db *database.Database, args
 
 	// Reload branding
 	utils.Init()
+
+	// Reload log manager
+	managers.ReloadSharedLogManager()
 
 	fmt.Fprintln(output, "Config, methods, theme, and branding reloaded successfully.")
 }

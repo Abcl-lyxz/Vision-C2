@@ -1,12 +1,12 @@
 package handlers
 
 import (
-	"arismcnc/database"
-	"arismcnc/managers"
-	"arismcnc/utils"
 	"log"
 	"net/http"
 	"strings"
+	"visioncnc/database"
+	"visioncnc/managers"
+	"visioncnc/utils"
 )
 
 var db *database.Database

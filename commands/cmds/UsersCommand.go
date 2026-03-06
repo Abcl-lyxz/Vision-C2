@@ -1,8 +1,6 @@
 package cmds
 
 import (
-	"arismcnc/database"
-	"arismcnc/utils"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +8,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"visioncnc/database"
+	"visioncnc/utils"
 
 	"github.com/gliderlabs/ssh"
 )

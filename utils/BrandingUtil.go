@@ -164,6 +164,19 @@ func Branding(session ssh.Session, filename string, content map[string]interface
 		}
 	}
 
+	// Process <<$link(TEXT,URL)>> → OSC 8 terminal hyperlinks (after placeholder substitution
+	// so that any <<$attack.Target>> inside the URL is already expanded)
+	linkRegex := regexp.MustCompile(`<<\$link\(([^,]+),([^)]+)\)>>`)
+	fileContent = linkRegex.ReplaceAllStringFunc(fileContent, func(match string) string {
+		subs := linkRegex.FindStringSubmatch(match)
+		if len(subs) < 3 {
+			return match
+		}
+		text := strings.TrimSpace(subs[1])
+		url := strings.TrimSpace(subs[2])
+		return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, text)
+	})
+
 	// Apply gradients to text wrapped in <<gradient(name)>>...<<\>>
 	gradientRegex := regexp.MustCompile(`<<gradient\(([^)]+)\)>>(.*?)<<\\>>`)
 	fileContent = gradientRegex.ReplaceAllStringFunc(fileContent, func(match string) string {

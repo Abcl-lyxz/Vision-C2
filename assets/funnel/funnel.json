@@ -9,6 +9,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=udp"
@@ -24,6 +27,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=tcp"
@@ -39,6 +45,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=game"
@@ -54,6 +63,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=https-bypass"
@@ -69,6 +81,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=tls"
@@ -84,6 +99,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=dns"
@@ -99,6 +117,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=ovh"
@@ -114,6 +135,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=discord"
@@ -129,6 +153,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [
       "vip"
     ],
@@ -146,6 +173,9 @@
     "minTime": 1,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [
       "vip"
     ],
@@ -163,6 +193,9 @@
     "minTime": 10,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [
       "vip"
     ],
@@ -178,6 +211,9 @@
     "minTime": 10,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [
       "vip"
     ],
@@ -195,6 +231,9 @@
     "minTime": 10,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [
       "vip"
     ],
@@ -212,6 +251,9 @@
     "minTime": 10,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=cloudflare"
@@ -227,6 +269,9 @@
     "minTime": 10,
     "maxTime": 400,
     "slots": 60,
+    "api_mode": "all",
+    "api_timeout": 2,
+    "api_retry": 0,
     "permission": [],
     "API": [
       "http://YOUR_API_HOST:PORT/api/attack?username=USER&api_key=KEY&target={host}&port={port}&time={time}&method=http"

@@ -1,8 +1,8 @@
 package cmds
 
 import (
-	"arismcnc/database"
 	"io"
+	"visioncnc/database"
 
 	"github.com/gliderlabs/ssh"
 )

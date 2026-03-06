@@ -5,10 +5,10 @@ import (
 	"io"
 	"strings"
 
-	"arismcnc/commands/cmds"
-	"arismcnc/database"
-	"arismcnc/managers"
-	"arismcnc/utils"
+	"visioncnc/commands/cmds"
+	"visioncnc/database"
+	"visioncnc/managers"
+	"visioncnc/utils"
 
 	"github.com/gliderlabs/ssh"
 )

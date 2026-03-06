@@ -9,9 +9,9 @@ import (
 	"sync"
 	"syscall"
 
-	"arismcnc/database"
-	"arismcnc/handlers"
-	"arismcnc/utils"
+	"visioncnc/database"
+	"visioncnc/handlers"
+	"visioncnc/utils"
 
 	"github.com/gliderlabs/ssh"
 )

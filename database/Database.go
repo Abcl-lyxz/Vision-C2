@@ -1,7 +1,6 @@
 package database
 
 import (
-	"arismcnc/utils"
 	"crypto/rand"
 	"database/sql"
 	"errors"
@@ -9,7 +8,9 @@ import (
 	"log"
 	"math/big"
 	"os"
+	"strings"
 	"time"
+	"visioncnc/utils"
 
 	_ "github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/bcrypt"
@@ -435,6 +436,76 @@ func (db *Database) ClearLogs() bool {
 		return false
 	}
 	return true
+}
+
+// GetCurrentAttacksLengthByGroup counts active attacks whose method belongs to the given group.
+func (db *Database) GetCurrentAttacksLengthByGroup(group string) int {
+	methods := utils.GetMethodsList()
+	var names []interface{}
+	for _, m := range methods {
+		if m.Group == group {
+			names = append(names, m.Method)
+		}
+	}
+	if len(names) == 0 {
+		return 0
+	}
+	placeholders := strings.Repeat("?,", len(names))
+	placeholders = placeholders[:len(placeholders)-1]
+	query := "SELECT COUNT(*) FROM attacks WHERE end > NOW() AND method IN (" + placeholders + ")"
+	var count int
+	if err := db.DB.QueryRow(query, names...).Scan(&count); err != nil {
+		log.Println("Error counting group attacks:", err)
+		return 0
+	}
+	return count
+}
+
+// GetTodayAttacksCount returns the number of attacks started today.
+func (db *Database) GetTodayAttacksCount() int {
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM attacks WHERE DATE(start) = CURDATE()").Scan(&count); err != nil {
+		log.Println("Error counting today attacks:", err)
+		return 0
+	}
+	return count
+}
+
+// MethodStat holds a method name and its attack count.
+type MethodStat struct {
+	Method string
+	Count  int
+}
+
+// GetTopMethods returns the top N most used methods today.
+func (db *Database) GetTopMethods(limit int) []MethodStat {
+	rows, err := db.DB.Query(
+		"SELECT method, COUNT(*) as cnt FROM attacks WHERE DATE(start) = CURDATE() GROUP BY method ORDER BY cnt DESC LIMIT ?",
+		limit,
+	)
+	if err != nil {
+		log.Println("Error getting top methods:", err)
+		return nil
+	}
+	defer rows.Close()
+	var stats []MethodStat
+	for rows.Next() {
+		var s MethodStat
+		if err := rows.Scan(&s.Method, &s.Count); err == nil {
+			stats = append(stats, s)
+		}
+	}
+	return stats
+}
+
+// GetTotalAttacksCount returns the total number of attacks ever logged.
+func (db *Database) GetTotalAttacksCount() int {
+	var count int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM attacks").Scan(&count); err != nil {
+		log.Println("Error counting total attacks:", err)
+		return 0
+	}
+	return count
 }
 
 // GetCurrentAttacksLength2 counts active attacks for a specific method

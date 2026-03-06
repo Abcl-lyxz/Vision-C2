@@ -5,6 +5,11 @@
 		"attacks_enabled": true,
 		"global_cooldown": 0,
 		"global_slots": 3,
+		"layer_slots": {
+			"LAYER 4": 0,
+			"LAYER 7": 0
+		},
+		"idle_timeout_minutes": 0,
 		"ipinfo_token": "YOUR_IPINFO_TOKEN",
 		"proxy_url": "YOUR_PROXY_HOST:PORT",
 		"password_min_length": 6,

